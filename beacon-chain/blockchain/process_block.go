@@ -8,14 +8,12 @@ import (
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-ssz"
-	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain/metrics"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/shared/attestationutil"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
 )
@@ -136,7 +134,7 @@ func (s *Service) onBlock(ctx context.Context, signed *ethpb.SignedBeaconBlock) 
 	// Epoch boundary bookkeeping such as logging epoch summaries.
 	if postState.Slot() >= s.nextEpochBoundarySlot {
 		logEpochData(postState)
-		metrics.ReportEpochMetrics(postState)
+		reportEpochMetrics(postState)
 
 		// Update committees cache at epoch boundary slot.
 		if err := helpers.UpdateCommitteeCache(postState, helpers.CurrentEpoch(postState)); err != nil {
@@ -152,6 +150,11 @@ func (s *Service) onBlock(ctx context.Context, signed *ethpb.SignedBeaconBlock) 
 	// Delete the processed block attestations from attestation pool.
 	if err := s.deletePoolAtts(b.Body.Attestations); err != nil {
 		return nil, err
+	}
+
+	// Delete the processed block attester slashings from slashings pool.
+	for i := 0; i < len(b.Body.AttesterSlashings); i++ {
+		s.slashingPool.MarkIncludedAttesterSlashing(b.Body.AttesterSlashings[i])
 	}
 
 	return postState, nil
@@ -197,21 +200,8 @@ func (s *Service) onBlockInitialSyncStateTransition(ctx context.Context, signed 
 		return errors.Wrapf(err, "could not insert block %d to fork choice store", b.Slot)
 	}
 
-	if featureconfig.Get().InitSyncCacheState {
-		s.initSyncState[root] = postState.Copy()
-		s.filterBoundaryCandidates(ctx, root, postState)
-	} else {
-		if err := s.beaconDB.SaveState(ctx, postState, root); err != nil {
-			return errors.Wrap(err, "could not save state")
-		}
-	}
-
-	if flags.Get().EnableArchive {
-		atts := signed.Block.Body.Attestations
-		if err := s.beaconDB.SaveAttestations(ctx, atts); err != nil {
-			return errors.Wrapf(err, "could not save block attestations from slot %d", b.Slot)
-		}
-	}
+	s.initSyncState[root] = postState.Copy()
+	s.filterBoundaryCandidates(ctx, root, postState)
 
 	if flags.Get().EnableArchive {
 		atts := signed.Block.Body.Attestations
@@ -259,21 +249,19 @@ func (s *Service) onBlockInitialSyncStateTransition(ctx context.Context, signed 
 		return errors.Wrap(err, "could not save finalized checkpoint")
 	}
 
-	if featureconfig.Get().InitSyncCacheState {
-		numOfStates := len(s.boundaryRoots)
-		if numOfStates > initialSyncCacheSize {
-			if err = s.persistCachedStates(ctx, numOfStates); err != nil {
-				return err
-			}
+	numOfStates := len(s.boundaryRoots)
+	if numOfStates > initialSyncCacheSize {
+		if err = s.persistCachedStates(ctx, numOfStates); err != nil {
+			return err
 		}
-		if len(s.initSyncState) > maxCacheSize {
-			s.pruneOldNonFinalizedStates()
-		}
+	}
+	if len(s.initSyncState) > maxCacheSize {
+		s.pruneOldNonFinalizedStates()
 	}
 
 	// Epoch boundary bookkeeping such as logging epoch summaries.
 	if postState.Slot() >= s.nextEpochBoundarySlot {
-		metrics.ReportEpochMetrics(postState)
+		reportEpochMetrics(postState)
 		s.nextEpochBoundarySlot = helpers.StartSlot(helpers.NextEpoch(postState))
 
 		// Update committees cache at epoch boundary slot.
@@ -284,11 +272,9 @@ func (s *Service) onBlockInitialSyncStateTransition(ctx context.Context, signed 
 			return err
 		}
 
-		if featureconfig.Get().InitSyncCacheState {
-			if helpers.IsEpochStart(postState.Slot()) {
-				if err := s.beaconDB.SaveState(ctx, postState, root); err != nil {
-					return errors.Wrap(err, "could not save state")
-				}
+		if helpers.IsEpochStart(postState.Slot()) {
+			if err := s.beaconDB.SaveState(ctx, postState, root); err != nil {
+				return errors.Wrap(err, "could not save state")
 			}
 		}
 	}
