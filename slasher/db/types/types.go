@@ -1,3 +1,5 @@
+// Package types includes important database-related types for
+// slasher-specific logic.
 package types
 
 // SlashingStatus enum like structure.
@@ -12,6 +14,13 @@ const (
 	Included
 	// Reverted slashing proof that has been reverted and therefore is relevant again.
 	Reverted //relevant again
+)
+
+const (
+	// UseCache is used to mark when calling a DB function, to save it to the cache.
+	UseCache = true
+	// UseDB is used to mark when calling a DB function, to save it to the DB.
+	UseDB = false
 )
 
 func (status SlashingStatus) String() string {

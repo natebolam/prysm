@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"testing"
@@ -8,28 +9,27 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	mockChain "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache/depositcache"
-	blk "github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	dbutil "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
 	mockPOW "github.com/prysmaticlabs/prysm/beacon-chain/powchain/testing"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
+	mockSync "github.com/prysmaticlabs/prysm/beacon-chain/sync/initial-sync/testing"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
 )
 
-func TestValidatorStatus_Deposited(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+func TestValidatorStatus_DepositedEth1(t *testing.T) {
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
-	pubKey := pubKey(1)
+	pubKey1 := pubKey(1)
 	depData := &ethpb.Deposit_Data{
-		PublicKey:             pubKey,
+		PublicKey:             pubKey1,
 		Signature:             []byte("hi"),
 		WithdrawalCredentials: []byte("hey"),
 	}
@@ -62,7 +62,64 @@ func TestValidatorStatus_Deposited(t *testing.T) {
 		Eth1InfoFetcher: p,
 	}
 	req := &ethpb.ValidatorStatusRequest{
-		PublicKey: pubKey,
+		PublicKey: pubKey1,
+	}
+	resp, err := vs.ValidatorStatus(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Could not get validator status %v", err)
+	}
+	if resp.Status != ethpb.ValidatorStatus_DEPOSITED {
+		t.Errorf("Wanted %v, got %v", ethpb.ValidatorStatus_DEPOSITED, resp.Status)
+	}
+}
+
+func TestValidatorStatus_Deposited(t *testing.T) {
+	db, _ := dbutil.SetupDB(t)
+	ctx := context.Background()
+
+	pubKey1 := pubKey(1)
+	depData := &ethpb.Deposit_Data{
+		PublicKey:             pubKey1,
+		Signature:             []byte("hi"),
+		WithdrawalCredentials: []byte("hey"),
+	}
+	deposit := &ethpb.Deposit{
+		Data: depData,
+	}
+	depositTrie, err := trieutil.NewTrie(int(params.BeaconConfig().DepositContractTreeDepth))
+	if err != nil {
+		t.Fatalf("Could not setup deposit trie: %v", err)
+	}
+	depositCache := depositcache.NewDepositCache()
+	depositCache.InsertDeposit(ctx, deposit, 0 /*blockNum*/, 0, depositTrie.Root())
+	height := time.Unix(int64(params.BeaconConfig().Eth1FollowDistance), 0).Unix()
+	p := &mockPOW.POWChain{
+		TimesByHeight: map[int]uint64{
+			0: uint64(height),
+		},
+	}
+	stateObj, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
+		Validators: []*ethpb.Validator{
+			{
+				PublicKey:                  pubKey1,
+				ActivationEligibilityEpoch: 1,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vs := &Server{
+		BeaconDB:       db,
+		DepositFetcher: depositCache,
+		BlockFetcher:   p,
+		HeadFetcher: &mockChain.ChainService{
+			State: stateObj,
+		},
+		Eth1InfoFetcher: p,
+	}
+	req := &ethpb.ValidatorStatusRequest{
+		PublicKey: pubKey1,
 	}
 	resp, err := vs.ValidatorStatus(context.Background(), req)
 	if err != nil {
@@ -74,34 +131,33 @@ func TestValidatorStatus_Deposited(t *testing.T) {
 }
 
 func TestValidatorStatus_Pending(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
 	// Pending active because activation epoch is still defaulted at far future slot.
-	state, _ := stateTrie.InitializeFromProto(&pbp2p.BeaconState{
-		Validators: []*ethpb.Validator{
-			{
-				ActivationEpoch:   params.BeaconConfig().FarFutureEpoch,
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-				PublicKey:         pubKey,
-			},
+	state := testutil.NewBeaconState()
+	if err := state.SetSlot(5000); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetValidators([]*ethpb.Validator{
+		{
+			ActivationEpoch:   params.BeaconConfig().FarFutureEpoch,
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
+			PublicKey:         pubKey,
 		},
-		Slot: 5000,
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.SaveState(ctx, state, genesisRoot); err != nil {
 		t.Fatalf("could not save state: %v", err)
 	}
@@ -152,17 +208,13 @@ func TestValidatorStatus_Pending(t *testing.T) {
 }
 
 func TestValidatorStatus_Active(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	// This test breaks if it doesnt use mainnet config
+	params.SetupTestConfigCleanup(t)
 	params.OverrideBeaconConfig(params.MainnetConfig())
-	defer params.OverrideBeaconConfig(params.MinimalSpecConfig())
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
 
 	depData := &ethpb.Deposit_Data{
 		PublicKey:             pubKey,
@@ -181,13 +233,13 @@ func TestValidatorStatus_Active(t *testing.T) {
 	depositCache.InsertDeposit(ctx, deposit, 0 /*blockNum*/, 0, depositTrie.Root())
 
 	// Active because activation epoch <= current epoch < exit epoch.
-	activeEpoch := helpers.DelayedActivationExitEpoch(0)
+	activeEpoch := helpers.ActivationExitEpoch(0)
 
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -229,9 +281,8 @@ func TestValidatorStatus_Active(t *testing.T) {
 	}
 
 	expected := &ethpb.ValidatorStatusResponse{
-		Status:               ethpb.ValidatorStatus_ACTIVE,
-		ActivationEpoch:      5,
-		DepositInclusionSlot: 2218,
+		Status:          ethpb.ValidatorStatus_ACTIVE,
+		ActivationEpoch: 5,
 	}
 	if !proto.Equal(resp, expected) {
 		t.Errorf("Wanted %v, got %v", expected, resp)
@@ -239,25 +290,21 @@ func TestValidatorStatus_Active(t *testing.T) {
 }
 
 func TestValidatorStatus_Exiting(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
 
 	// Initiated exit because validator exit epoch and withdrawable epoch are not FAR_FUTURE_EPOCH
 	slot := uint64(10000)
 	epoch := helpers.SlotToEpoch(slot)
-	exitEpoch := helpers.DelayedActivationExitEpoch(epoch)
+	exitEpoch := helpers.ActivationExitEpoch(epoch)
 	withdrawableEpoch := exitEpoch + params.BeaconConfig().MinValidatorWithdrawabilityDelay
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -316,23 +363,19 @@ func TestValidatorStatus_Exiting(t *testing.T) {
 }
 
 func TestValidatorStatus_Slashing(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
 
 	// Exit slashed because slashed is true, exit epoch is =< current epoch and withdrawable epoch > epoch .
 	slot := uint64(10000)
 	epoch := helpers.SlotToEpoch(slot)
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -390,27 +433,25 @@ func TestValidatorStatus_Slashing(t *testing.T) {
 }
 
 func TestValidatorStatus_Exited(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
 
 	// Exit because only exit epoch is =< current epoch.
 	slot := uint64(10000)
 	epoch := helpers.SlotToEpoch(slot)
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
-	numDeposits := params.BeaconConfig().MinGenesisActiveValidatorCount
+	params.SetupTestConfigCleanup(t)
+	params.OverrideBeaconConfig(params.MainnetConfig())
+	numDeposits := uint64(64)
 	beaconState, _ := testutil.DeterministicGenesisState(t, numDeposits)
 	if err := db.SaveState(ctx, beaconState, genesisRoot); err != nil {
 		t.Fatal(err)
@@ -418,13 +459,16 @@ func TestValidatorStatus_Exited(t *testing.T) {
 	if err := db.SaveHeadBlockRoot(ctx, genesisRoot); err != nil {
 		t.Fatalf("Could not save genesis state: %v", err)
 	}
-	state, _ := stateTrie.InitializeFromProto(&pbp2p.BeaconState{
-		Slot: slot,
-		Validators: []*ethpb.Validator{{
-			PublicKey:         pubKey,
-			WithdrawableEpoch: epoch + 1},
-		},
-	})
+	state := testutil.NewBeaconState()
+	if err := state.SetSlot(slot); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetValidators([]*ethpb.Validator{{
+		PublicKey:         pubKey,
+		WithdrawableEpoch: epoch + 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	depData := &ethpb.Deposit_Data{
 		PublicKey:             pubKey,
 		Signature:             []byte("hi"),
@@ -467,8 +511,7 @@ func TestValidatorStatus_Exited(t *testing.T) {
 }
 
 func TestValidatorStatus_UnknownStatus(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	pubKey := pubKey(1)
 	depositCache := depositcache.NewDepositCache()
 	stateObj, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
@@ -497,12 +540,11 @@ func TestValidatorStatus_UnknownStatus(t *testing.T) {
 	}
 }
 
-func TestMultipleValidatorStatus_OK(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+func TestActivationStatus_OK(t *testing.T) {
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
-	pubKeys := [][]byte{pubKey(1), pubKey(2), pubKey(3)}
+	pubKeys := [][]byte{pubKey(1), pubKey(2), pubKey(3), pubKey(4)}
 	stateObj, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
 		Slot: 4000,
 		Validators: []*ethpb.Validator{
@@ -516,10 +558,15 @@ func TestMultipleValidatorStatus_OK(t *testing.T) {
 				ExitEpoch:       params.BeaconConfig().FarFutureEpoch,
 				PublicKey:       pubKeys[1],
 			},
+			{
+				ActivationEligibilityEpoch: 700,
+				ExitEpoch:                  params.BeaconConfig().FarFutureEpoch,
+				PublicKey:                  pubKeys[3],
+			},
 		},
 	})
-	block := blk.NewGenesisBlock([]byte{})
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	block := testutil.NewBeaconBlock()
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -552,12 +599,6 @@ func TestMultipleValidatorStatus_OK(t *testing.T) {
 	depositTrie.Insert(dep.Data.Signature, 15)
 	depositCache.InsertDeposit(context.Background(), dep, 0, 0, depositTrie.Root())
 
-	if err := db.SaveValidatorIndex(ctx, pubKeys[0], 0); err != nil {
-		t.Fatalf("could not save validator index: %v", err)
-	}
-	if err := db.SaveValidatorIndex(ctx, pubKeys[1], 1); err != nil {
-		t.Fatalf("could not save validator index: %v", err)
-	}
 	vs := &Server{
 		BeaconDB:           db,
 		Ctx:                context.Background(),
@@ -568,7 +609,7 @@ func TestMultipleValidatorStatus_OK(t *testing.T) {
 		DepositFetcher:     depositCache,
 		HeadFetcher:        &mockChain.ChainService{State: stateObj, Root: genesisRoot[:]},
 	}
-	activeExists, response, err := vs.multipleValidatorStatus(context.Background(), pubKeys)
+	activeExists, response, err := vs.activationStatus(context.Background(), pubKeys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -579,79 +620,93 @@ func TestMultipleValidatorStatus_OK(t *testing.T) {
 		t.Errorf("Validator with pubkey %#x is not activated and instead has this status: %s",
 			response[0].PublicKey, response[0].Status.Status.String())
 	}
+	if response[0].Index != 0 {
+		t.Errorf("Validator with pubkey %#x is expected to have index %d, received %d", response[0].PublicKey, 0, response[0].Index)
+	}
 
 	if response[1].Status.Status != ethpb.ValidatorStatus_ACTIVE {
 		t.Errorf("Validator with pubkey %#x was activated when not supposed to",
 			response[1].PublicKey)
 	}
+	if response[1].Index != 1 {
+		t.Errorf("Validator with pubkey %#x is expected to have index %d, received %d", response[1].PublicKey, 1, response[1].Index)
+	}
 
 	if response[2].Status.Status != ethpb.ValidatorStatus_DEPOSITED {
-		t.Errorf("Validator with pubkey %#x is not activated and instead has this status: %s",
+		t.Errorf("Validator with pubkey %#x is not unknown and instead has this status: %s",
 			response[2].PublicKey, response[2].Status.Status.String())
+	}
+	if response[2].Index != params.BeaconConfig().FarFutureEpoch {
+		t.Errorf("Validator with pubkey %#x is expected to have index %d, received %d", response[2].PublicKey, params.BeaconConfig().FarFutureEpoch, response[2].Index)
+	}
+
+	if response[3].Status.Status != ethpb.ValidatorStatus_DEPOSITED {
+		t.Errorf("Validator with pubkey %#x was not deposited and has this status: %s",
+			response[3].PublicKey, response[3].Status.Status.String())
+	}
+	if response[3].Index != 2 {
+		t.Errorf("Validator with pubkey %#x is expected to have index %d, received %d", response[3].PublicKey, 2, response[3].Index)
 	}
 }
 
 func TestValidatorStatus_CorrectActivationQueue(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pbKey := pubKey(5)
-	if err := db.SaveValidatorIndex(ctx, pbKey, 5); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
 	currentSlot := uint64(5000)
 	// Pending active because activation epoch is still defaulted at far future slot.
-	state, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
-		Validators: []*ethpb.Validator{
-			{
-				ActivationEpoch:   0,
-				PublicKey:         pubKey(0),
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-			},
-			{
-				ActivationEpoch:   0,
-				PublicKey:         pubKey(1),
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-			},
-			{
-				ActivationEpoch:   0,
-				PublicKey:         pubKey(2),
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-			},
-			{
-				ActivationEpoch:   0,
-				PublicKey:         pubKey(3),
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-			},
-			{
-				ActivationEpoch:   currentSlot/params.BeaconConfig().SlotsPerEpoch + 1,
-				PublicKey:         pbKey,
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-			},
-			{
-				ActivationEpoch:   currentSlot/params.BeaconConfig().SlotsPerEpoch + 4,
-				PublicKey:         pubKey(5),
-				ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
-				WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
-			},
+	validators := []*ethpb.Validator{
+		{
+			ActivationEpoch:   0,
+			PublicKey:         pubKey(0),
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
 		},
-		Slot: currentSlot,
-	})
-	if err != nil {
+		{
+			ActivationEpoch:   0,
+			PublicKey:         pubKey(1),
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
+		},
+		{
+			ActivationEpoch:   0,
+			PublicKey:         pubKey(2),
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
+		},
+		{
+			ActivationEpoch:   0,
+			PublicKey:         pubKey(3),
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
+		},
+		{
+			ActivationEpoch:   currentSlot/params.BeaconConfig().SlotsPerEpoch + 1,
+			PublicKey:         pbKey,
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
+		},
+		{
+			ActivationEpoch:   currentSlot/params.BeaconConfig().SlotsPerEpoch + 4,
+			PublicKey:         pubKey(5),
+			ExitEpoch:         params.BeaconConfig().FarFutureEpoch,
+			WithdrawableEpoch: params.BeaconConfig().FarFutureEpoch,
+		},
+	}
+	state := testutil.NewBeaconState()
+	if err := state.SetValidators(validators); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetSlot(currentSlot); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveState(ctx, state, genesisRoot); err != nil {
@@ -711,14 +766,10 @@ func TestValidatorStatus_CorrectActivationQueue(t *testing.T) {
 }
 
 func TestDepositBlockSlotAfterGenesisTime(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
 
 	depData := &ethpb.Deposit_Data{
 		PublicKey:             pubKey,
@@ -743,16 +794,16 @@ func TestDepositBlockSlotAfterGenesisTime(t *testing.T) {
 		},
 	}
 
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
 
-	activeEpoch := helpers.DelayedActivationExitEpoch(0)
+	activeEpoch := helpers.ActivationExitEpoch(0)
 
 	state, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
 		GenesisTime: uint64(time.Unix(0, 0).Unix()),
@@ -777,12 +828,12 @@ func TestDepositBlockSlotAfterGenesisTime(t *testing.T) {
 
 	eth1BlockNumBigInt := big.NewInt(1000000)
 
-	resp, err := vs.depositBlockSlot(context.Background(), eth1BlockNumBigInt, state)
+	resp, err := vs.depositBlockSlot(context.Background(), state, eth1BlockNumBigInt)
 	if err != nil {
 		t.Fatalf("Could not get the deposit block slot %v", err)
 	}
 
-	expected := uint64(53)
+	expected := uint64(69)
 
 	if resp != expected {
 		t.Errorf("Wanted %v, got %v", expected, resp)
@@ -790,14 +841,10 @@ func TestDepositBlockSlotAfterGenesisTime(t *testing.T) {
 }
 
 func TestDepositBlockSlotBeforeGenesisTime(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
 	pubKey := pubKey(1)
-	if err := db.SaveValidatorIndex(ctx, pubKey, 0); err != nil {
-		t.Fatalf("Could not save validator index: %v", err)
-	}
 
 	depData := &ethpb.Deposit_Data{
 		PublicKey:             pubKey,
@@ -822,16 +869,16 @@ func TestDepositBlockSlotBeforeGenesisTime(t *testing.T) {
 		},
 	}
 
-	block := blk.NewGenesisBlock([]byte{})
+	block := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(ctx, block); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
-	genesisRoot, err := ssz.HashTreeRoot(block.Block)
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
 
-	activeEpoch := helpers.DelayedActivationExitEpoch(0)
+	activeEpoch := helpers.ActivationExitEpoch(0)
 
 	state, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
 		GenesisTime: uint64(time.Unix(25000, 0).Unix()),
@@ -855,8 +902,7 @@ func TestDepositBlockSlotBeforeGenesisTime(t *testing.T) {
 	}
 
 	eth1BlockNumBigInt := big.NewInt(1000000)
-
-	resp, err := vs.depositBlockSlot(context.Background(), eth1BlockNumBigInt, state)
+	resp, err := vs.depositBlockSlot(context.Background(), state, eth1BlockNumBigInt)
 	if err != nil {
 		t.Fatalf("Could not get the deposit block slot %v", err)
 	}
@@ -865,5 +911,211 @@ func TestDepositBlockSlotBeforeGenesisTime(t *testing.T) {
 
 	if resp != expected {
 		t.Errorf("Wanted %v, got %v", expected, resp)
+	}
+}
+
+func TestMultipleValidatorStatus_Pubkeys(t *testing.T) {
+	db, _ := dbutil.SetupDB(t)
+	ctx := context.Background()
+
+	pubKeys := [][]byte{pubKey(1), pubKey(2), pubKey(3), pubKey(4)}
+	stateObj, err := stateTrie.InitializeFromProtoUnsafe(&pbp2p.BeaconState{
+		Slot: 4000,
+		Validators: []*ethpb.Validator{
+			{
+				ActivationEpoch: 0,
+				ExitEpoch:       params.BeaconConfig().FarFutureEpoch,
+				PublicKey:       pubKeys[0],
+			},
+			{
+				ActivationEpoch: 0,
+				ExitEpoch:       params.BeaconConfig().FarFutureEpoch,
+				PublicKey:       pubKeys[1],
+			},
+			{
+				ActivationEligibilityEpoch: 700,
+				ExitEpoch:                  params.BeaconConfig().FarFutureEpoch,
+				PublicKey:                  pubKeys[3],
+			},
+		},
+	})
+	block := testutil.NewBeaconBlock()
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
+	if err != nil {
+		t.Fatalf("Could not get signing root %v", err)
+	}
+	depData := &ethpb.Deposit_Data{
+		PublicKey:             pubKey(1),
+		Signature:             []byte("hi"),
+		WithdrawalCredentials: []byte("hey"),
+		Amount:                10,
+	}
+
+	dep := &ethpb.Deposit{
+		Data: depData,
+	}
+	depositTrie, err := trieutil.NewTrie(int(params.BeaconConfig().DepositContractTreeDepth))
+	if err != nil {
+		t.Fatalf("Could not setup deposit trie: %v", err)
+	}
+	depositCache := depositcache.NewDepositCache()
+	depositCache.InsertDeposit(ctx, dep, 10 /*blockNum*/, 0, depositTrie.Root())
+	depData = &ethpb.Deposit_Data{
+		PublicKey:             pubKey(3),
+		Signature:             []byte("hi"),
+		WithdrawalCredentials: []byte("hey"),
+		Amount:                10,
+	}
+
+	dep = &ethpb.Deposit{
+		Data: depData,
+	}
+	depositTrie.Insert(dep.Data.Signature, 15)
+	depositCache.InsertDeposit(context.Background(), dep, 0, 0, depositTrie.Root())
+
+	vs := &Server{
+		BeaconDB:           db,
+		Ctx:                context.Background(),
+		CanonicalStateChan: make(chan *pbp2p.BeaconState, 1),
+		ChainStartFetcher:  &mockPOW.POWChain{},
+		BlockFetcher:       &mockPOW.POWChain{},
+		Eth1InfoFetcher:    &mockPOW.POWChain{},
+		DepositFetcher:     depositCache,
+		HeadFetcher:        &mockChain.ChainService{State: stateObj, Root: genesisRoot[:]},
+		SyncChecker:        &mockSync.Sync{IsSyncing: false},
+	}
+
+	want := []*ethpb.ValidatorStatusResponse{
+		{
+			Status: ethpb.ValidatorStatus_ACTIVE,
+		},
+		{
+			Status: ethpb.ValidatorStatus_ACTIVE,
+		},
+		{
+			Status:               ethpb.ValidatorStatus_DEPOSITED,
+			DepositInclusionSlot: 69,
+			ActivationEpoch:      18446744073709551615,
+		},
+		{
+			Status: ethpb.ValidatorStatus_DEPOSITED,
+		},
+	}
+
+	req := &ethpb.MultipleValidatorStatusRequest{PublicKeys: pubKeys}
+	response, err := vs.MultipleValidatorStatus(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(response.PublicKeys) != len(pubKeys) {
+		t.Fatalf(
+			"Recieved %d public keys, wanted %d public keys", len(response.PublicKeys), len(pubKeys))
+	}
+	for i, resp := range response.PublicKeys {
+		if !bytes.Equal(pubKeys[i], resp) {
+			t.Fatalf("Wanted: %v\n Recieved: %v\n", pubKeys[i], resp)
+		}
+	}
+	if len(response.Statuses) != len(pubKeys) {
+		t.Fatalf("Recieved %d statuses, wanted %d statuses", len(response.Statuses), len(pubKeys))
+	}
+	for i, resp := range response.Statuses {
+		if !proto.Equal(want[i], resp) {
+			t.Fatalf("Wanted %v\n Recieved: %v\n", want[i], resp)
+		}
+	}
+}
+
+func TestMultipleValidatorStatus_Indices(t *testing.T) {
+	db, _ := dbutil.SetupDB(t)
+	slot := uint64(10000)
+	epoch := helpers.SlotToEpoch(slot)
+	pubKeys := [][]byte{pubKey(1), pubKey(2), pubKey(3), pubKey(4)}
+	beaconState := &pbp2p.BeaconState{
+		Slot: 4000,
+		Validators: []*ethpb.Validator{
+			{
+				ActivationEpoch: 0,
+				ExitEpoch:       params.BeaconConfig().FarFutureEpoch,
+				PublicKey:       pubKeys[0],
+			},
+			{
+				ActivationEpoch: 0,
+				ExitEpoch:       params.BeaconConfig().FarFutureEpoch,
+				PublicKey:       pubKeys[1],
+			},
+			{
+				ActivationEligibilityEpoch: 700,
+				ExitEpoch:                  params.BeaconConfig().FarFutureEpoch,
+				PublicKey:                  pubKeys[2],
+			},
+			{
+				Slashed:   true,
+				ExitEpoch: epoch + 1,
+				PublicKey: pubKeys[3],
+			},
+		},
+	}
+	stateObj, err := stateTrie.InitializeFromProtoUnsafe(beaconState)
+	block := testutil.NewBeaconBlock()
+	genesisRoot, err := stateutil.BlockRoot(block.Block)
+	if err != nil {
+		t.Fatalf("Could not get signing root %v", err)
+	}
+
+	vs := &Server{
+		BeaconDB:           db,
+		Ctx:                context.Background(),
+		CanonicalStateChan: make(chan *pbp2p.BeaconState, 1),
+		ChainStartFetcher:  &mockPOW.POWChain{},
+		BlockFetcher:       &mockPOW.POWChain{},
+		Eth1InfoFetcher:    &mockPOW.POWChain{},
+		HeadFetcher:        &mockChain.ChainService{State: stateObj, Root: genesisRoot[:]},
+		SyncChecker:        &mockSync.Sync{IsSyncing: false},
+	}
+
+	want := []*ethpb.ValidatorStatusResponse{
+		{
+			Status: ethpb.ValidatorStatus_ACTIVE,
+		},
+		{
+			Status: ethpb.ValidatorStatus_ACTIVE,
+		},
+		{
+			Status: ethpb.ValidatorStatus_DEPOSITED,
+		},
+		{
+			Status: ethpb.ValidatorStatus_SLASHING,
+		},
+	}
+
+	// Note: Index 4 should be skipped.
+	req := &ethpb.MultipleValidatorStatusRequest{Indices: []int64{0, 1, 2, 3, 4}}
+	response, err := vs.MultipleValidatorStatus(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(response.PublicKeys) != len(beaconState.Validators) {
+		t.Fatalf(
+			"Recieved %d public keys, wanted %d public keys",
+			len(response.PublicKeys), len(beaconState.Validators))
+	}
+	for i, resp := range response.PublicKeys {
+		expected := beaconState.Validators[i].PublicKey
+		if !bytes.Equal(expected, resp) {
+			t.Fatalf("Wanted: %v\n Recieved: %v\n", expected, resp)
+		}
+	}
+	if len(response.Statuses) != len(beaconState.Validators) {
+		t.Fatalf(
+			"Recieved %d statuses, wanted %d statuses",
+			len(response.Statuses), len(beaconState.Validators))
+	}
+	for i, resp := range response.Statuses {
+		if !proto.Equal(want[i], resp) {
+			t.Fatalf("Wanted %v\n Recieved: %v\n", want[i], resp)
+		}
 	}
 }

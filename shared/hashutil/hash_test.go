@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	fuzz "github.com/google/gofuzz"
+	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	pb "github.com/prysmaticlabs/prysm/proto/testing"
+	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 )
@@ -52,7 +54,10 @@ func TestHashKeccak256(t *testing.T) {
 	}
 
 	// Same hashing test from go-ethereum for keccak256
-	hashOfabc, _ := hex.DecodeString("4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45")
+	hashOfabc, err := hex.DecodeString("4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45")
+	if err != nil {
+		t.Error(err)
+	}
 	hash = hashutil.HashKeccak256([]byte("abc"))
 
 	h := bytesutil.ToBytes32(hashOfabc)
@@ -94,6 +99,27 @@ func TestHashProtoFuzz(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		msg := &pb.AddressBook{}
 		f.Fuzz(msg)
-		_, _ = hashutil.HashProto(msg)
+		_, err := hashutil.HashProto(msg)
+		_ = err
+	}
+}
+
+func BenchmarkHashProto(b *testing.B) {
+	att := &ethpb.Attestation{
+		AggregationBits: nil,
+		Data: &ethpb.AttestationData{
+			Slot:            5,
+			CommitteeIndex:  3,
+			BeaconBlockRoot: []byte{},
+			Source:          nil,
+			Target:          nil,
+		},
+		Signature: bls.NewAggregateSignature().Marshal(),
+	}
+
+	for i := 0; i < b.N; i++ {
+		if _, err := hashutil.HashProto(att); err != nil {
+			b.Log(err)
+		}
 	}
 }

@@ -1,8 +1,8 @@
 package blockchain
 
 import (
+	"bytes"
 	"context"
-	"encoding/hex"
 	"fmt"
 
 	"github.com/pkg/errors"
@@ -29,15 +29,20 @@ func (s *Service) getAttPreState(ctx context.Context, c *ethpb.Checkpoint) (*sta
 		return cachedState, nil
 	}
 
-	baseState, err := s.beaconDB.State(ctx, bytesutil.ToBytes32(c.Root))
+	if !s.stateGen.HasState(ctx, bytesutil.ToBytes32(c.Root)) {
+		if err := s.beaconDB.SaveBlocks(ctx, s.getInitSyncBlocks()); err != nil {
+			return nil, errors.Wrap(err, "could not save initial sync blocks")
+		}
+		s.clearInitSyncBlocks()
+	}
+
+	baseState, err := s.stateGen.StateByRoot(ctx, bytesutil.ToBytes32(c.Root))
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not get pre state for slot %d", helpers.StartSlot(c.Epoch))
 	}
-	if baseState == nil {
-		return nil, fmt.Errorf("pre state of target block %d does not exist", helpers.StartSlot(c.Epoch))
-	}
 
 	if helpers.StartSlot(c.Epoch) > baseState.Slot() {
+		baseState = baseState.Copy()
 		baseState, err = state.ProcessSlots(ctx, baseState, helpers.StartSlot(c.Epoch))
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not process slots up to %d", helpers.StartSlot(c.Epoch))
@@ -46,12 +51,13 @@ func (s *Service) getAttPreState(ctx context.Context, c *ethpb.Checkpoint) (*sta
 
 	if err := s.checkpointState.AddCheckpointState(&cache.CheckpointState{
 		Checkpoint: c,
-		State:      baseState.Copy(),
+		State:      baseState,
 	}); err != nil {
 		return nil, errors.Wrap(err, "could not saved checkpoint state to cache")
 	}
 
 	return baseState, nil
+
 }
 
 // verifyAttTargetEpoch validates attestation is from the current or previous epoch.
@@ -79,8 +85,22 @@ func (s *Service) verifyBeaconBlock(ctx context.Context, data *ethpb.Attestation
 		return fmt.Errorf("beacon block %#x does not exist", bytesutil.Trunc(data.BeaconBlockRoot))
 	}
 	if b.Block.Slot > data.Slot {
-		return fmt.Errorf("could not process attestation for future block, %d > %d", b.Block.Slot, data.Slot)
+		return fmt.Errorf("could not process attestation for future block, block.Slot=%d > attestation.Data.Slot=%d", b.Block.Slot, data.Slot)
 	}
+	return nil
+}
+
+// verifyLMDFFGConsistent verifies LMD GHOST and FFG votes are consistent with each other.
+func (s *Service) verifyLMDFFGConsistent(ctx context.Context, ffgEpoch uint64, ffgRoot []byte, lmdRoot []byte) error {
+	ffgSlot := helpers.StartSlot(ffgEpoch)
+	r, err := s.ancestor(ctx, lmdRoot, ffgSlot)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(ffgRoot, r) {
+		return errors.New("FFG and LMD votes are not consistent")
+	}
+
 	return nil
 }
 
@@ -90,36 +110,9 @@ func (s *Service) verifyAttestation(ctx context.Context, baseState *stateTrie.Be
 	if err != nil {
 		return nil, err
 	}
-	indexedAtt, err := attestationutil.ConvertToIndexed(ctx, a, committee)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not convert attestation to indexed attestation")
-	}
-
+	indexedAtt := attestationutil.ConvertToIndexed(ctx, a, committee)
 	if err := blocks.VerifyIndexedAttestation(ctx, baseState, indexedAtt); err != nil {
-		if err == blocks.ErrSigFailedToVerify {
-			// When sig fails to verify, check if there's a differences in committees due to
-			// different seeds.
-			aState, err := s.beaconDB.State(ctx, bytesutil.ToBytes32(a.Data.BeaconBlockRoot))
-			if err != nil {
-				return nil, err
-			}
-			epoch := helpers.SlotToEpoch(a.Data.Slot)
-			origSeed, err := helpers.Seed(baseState, epoch, params.BeaconConfig().DomainBeaconAttester)
-			if err != nil {
-				return nil, errors.Wrap(err, "could not get original seed")
-			}
-
-			aSeed, err := helpers.Seed(aState, epoch, params.BeaconConfig().DomainBeaconAttester)
-			if err != nil {
-				return nil, errors.Wrap(err, "could not get attester's seed")
-			}
-			if origSeed != aSeed {
-				return nil, fmt.Errorf("could not verify indexed attestation due to differences in seeds: %v != %v",
-					hex.EncodeToString(bytesutil.Trunc(origSeed[:])), hex.EncodeToString(bytesutil.Trunc(aSeed[:])))
-			}
-		}
 		return nil, errors.Wrap(err, "could not verify indexed attestation")
 	}
-
 	return indexedAtt, nil
 }

@@ -7,13 +7,14 @@ package beaconclient
 
 import (
 	"context"
-	"errors"
 
 	middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	grpc_opentracing "github.com/grpc-ecosystem/go-grpc-middleware/tracing/opentracing"
 	grpc_prometheus "github.com/grpc-ecosystem/go-grpc-prometheus"
+	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/shared/event"
+	"github.com/prysmaticlabs/prysm/slasher/cache"
 	"github.com/prysmaticlabs/prysm/slasher/db"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/plugin/ocgrpc"
@@ -39,21 +40,25 @@ type ChainFetcher interface {
 
 // Service struct for the beaconclient service of the slasher.
 type Service struct {
-	ctx                   context.Context
-	cancel                context.CancelFunc
-	cert                  string
-	conn                  *grpc.ClientConn
-	provider              string
-	beaconClient          ethpb.BeaconChainClient
-	slasherDB             db.Database
-	nodeClient            ethpb.NodeClient
-	clientFeed            *event.Feed
-	blockFeed             *event.Feed
-	attestationFeed       *event.Feed
-	proposerSlashingsChan chan *ethpb.ProposerSlashing
-	attesterSlashingsChan chan *ethpb.AttesterSlashing
-	attesterSlashingsFeed *event.Feed
-	proposerSlashingsFeed *event.Feed
+	ctx                         context.Context
+	cancel                      context.CancelFunc
+	cert                        string
+	conn                        *grpc.ClientConn
+	provider                    string
+	beaconClient                ethpb.BeaconChainClient
+	slasherDB                   db.Database
+	nodeClient                  ethpb.NodeClient
+	clientFeed                  *event.Feed
+	blockFeed                   *event.Feed
+	attestationFeed             *event.Feed
+	proposerSlashingsChan       chan *ethpb.ProposerSlashing
+	attesterSlashingsChan       chan *ethpb.AttesterSlashing
+	attesterSlashingsFeed       *event.Feed
+	proposerSlashingsFeed       *event.Feed
+	receivedAttestationsBuffer  chan *ethpb.IndexedAttestation
+	collectedAttestationsBuffer chan []*ethpb.IndexedAttestation
+	publicKeyCache              *cache.PublicKeyCache
+	genesisValidatorRoot        []byte
 }
 
 // Config options for the beaconclient service.
@@ -63,25 +68,38 @@ type Config struct {
 	SlasherDB             db.Database
 	ProposerSlashingsFeed *event.Feed
 	AttesterSlashingsFeed *event.Feed
+	BeaconClient          ethpb.BeaconChainClient
+	NodeClient            ethpb.NodeClient
 }
 
 // NewBeaconClientService instantiation.
-func NewBeaconClientService(ctx context.Context, cfg *Config) *Service {
+func NewBeaconClientService(ctx context.Context, cfg *Config) (*Service, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	return &Service{
-		cert:                  cfg.BeaconCert,
-		ctx:                   ctx,
-		cancel:                cancel,
-		provider:              cfg.BeaconProvider,
-		blockFeed:             new(event.Feed),
-		clientFeed:            new(event.Feed),
-		attestationFeed:       new(event.Feed),
-		slasherDB:             cfg.SlasherDB,
-		proposerSlashingsChan: make(chan *ethpb.ProposerSlashing, 1),
-		attesterSlashingsChan: make(chan *ethpb.AttesterSlashing, 1),
-		attesterSlashingsFeed: cfg.AttesterSlashingsFeed,
-		proposerSlashingsFeed: cfg.ProposerSlashingsFeed,
+	_ = cancel // govet fix for lost cancel. Cancel is handled in service.Stop()
+	publicKeyCache, err := cache.NewPublicKeyCache(0, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not create new cache")
 	}
+
+	return &Service{
+		cert:                        cfg.BeaconCert,
+		ctx:                         ctx,
+		cancel:                      cancel,
+		provider:                    cfg.BeaconProvider,
+		blockFeed:                   new(event.Feed),
+		clientFeed:                  new(event.Feed),
+		attestationFeed:             new(event.Feed),
+		slasherDB:                   cfg.SlasherDB,
+		proposerSlashingsChan:       make(chan *ethpb.ProposerSlashing, 1),
+		attesterSlashingsChan:       make(chan *ethpb.AttesterSlashing, 1),
+		attesterSlashingsFeed:       cfg.AttesterSlashingsFeed,
+		proposerSlashingsFeed:       cfg.ProposerSlashingsFeed,
+		receivedAttestationsBuffer:  make(chan *ethpb.IndexedAttestation, 1),
+		collectedAttestationsBuffer: make(chan []*ethpb.IndexedAttestation, 1),
+		publicKeyCache:              publicKeyCache,
+		beaconClient:                cfg.BeaconClient,
+		nodeClient:                  cfg.NodeClient,
+	}, nil
 }
 
 // BlockFeed returns a feed other services in slasher can subscribe to

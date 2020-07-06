@@ -8,9 +8,10 @@ import (
 // Pool defines the necessary methods for Prysm attestations pool to serve
 // fork choice and validators. In the current design, aggregated attestations
 // are used by proposer actor. Unaggregated attestations are used by
-// for aggregator actor.
+// aggregator actor.
 type Pool interface {
 	// For Aggregated attestations
+	AggregateUnaggregatedAttestations() error
 	SaveAggregatedAttestation(att *ethpb.Attestation) error
 	SaveAggregatedAttestations(atts []*ethpb.Attestation) error
 	AggregatedAttestations() []*ethpb.Attestation
@@ -22,6 +23,7 @@ type Pool interface {
 	SaveUnaggregatedAttestation(att *ethpb.Attestation) error
 	SaveUnaggregatedAttestations(atts []*ethpb.Attestation) error
 	UnaggregatedAttestations() []*ethpb.Attestation
+	UnaggregatedAttestationsBySlotIndex(slot uint64, committeeIndex uint64) []*ethpb.Attestation
 	DeleteUnaggregatedAttestation(att *ethpb.Attestation) error
 	UnaggregatedAttestationCount() int
 	// For attestations that were included in the block.

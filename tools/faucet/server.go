@@ -16,7 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/params"
-	recaptcha "github.com/prestonvanloon/go-recaptcha"
+	"github.com/prestonvanloon/go-recaptcha"
 	faucetpb "github.com/prysmaticlabs/prysm/proto/faucet"
 	"github.com/prysmaticlabs/prysm/shared/roughtime"
 	"google.golang.org/grpc/metadata"
@@ -24,11 +24,14 @@ import (
 
 const ipLimit = 5
 
-var fundingAmount = big.NewInt(3.5 * params.Ether)
+var fundingAmount *big.Int
 var funded = make(map[string]bool)
 var ipCounter = make(map[string]int)
 var fundingLock sync.Mutex
 var pruneDuration = time.Hour * 4
+
+const txGasLimit = 40000
+const fundingAmountWei = "32500000000000000000" // 32.5 ETH in Wei.
 
 type faucetServer struct {
 	r        recaptcha.Recaptcha
@@ -36,6 +39,14 @@ type faucetServer struct {
 	funder   common.Address
 	pk       *ecdsa.PrivateKey
 	minScore float64
+}
+
+func init() {
+	var ok bool
+	fundingAmount, ok = new(big.Int).SetString(fundingAmountWei, 10)
+	if !ok {
+		log.Fatal("could not set funding amount")
+	}
 }
 
 func newFaucetServer(
@@ -149,7 +160,7 @@ func (s *faucetServer) fundAndWait(to common.Address) (string, error) {
 		return "", err
 	}
 
-	tx := types.NewTransaction(nonce, to, fundingAmount, 40000, big.NewInt(1*params.GWei), nil /*data*/)
+	tx := types.NewTransaction(nonce, to, fundingAmount, txGasLimit, big.NewInt(1*params.GWei), nil /*data*/)
 
 	tx, err = types.SignTx(tx, types.NewEIP155Signer(big.NewInt(5)), s.pk)
 	if err != nil {

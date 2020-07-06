@@ -5,12 +5,11 @@ import (
 	"reflect"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-bitfield"
-	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
+	attaggregation "github.com/prysmaticlabs/prysm/shared/aggregation/attestations"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 )
 
@@ -21,7 +20,7 @@ func TestBatchAttestations_Multiple(t *testing.T) {
 	}
 
 	sk := bls.RandKey()
-	sig := sk.Sign([]byte("dummy_test_data"), 0 /*domain*/)
+	sig := sk.Sign([]byte("dummy_test_data"))
 	var mockRoot [32]byte
 
 	unaggregatedAtts := []*ethpb.Attestation{
@@ -99,21 +98,24 @@ func TestBatchAttestations_Multiple(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wanted, err := helpers.AggregateAttestations([]*ethpb.Attestation{unaggregatedAtts[0], aggregatedAtts[0], blockAtts[0]})
+	wanted, err := attaggregation.Aggregate([]*ethpb.Attestation{aggregatedAtts[0], blockAtts[0]})
 	if err != nil {
 		t.Fatal(err)
 	}
-	aggregated, err := helpers.AggregateAttestations([]*ethpb.Attestation{unaggregatedAtts[1], aggregatedAtts[1], blockAtts[1]})
+	aggregated, err := attaggregation.Aggregate([]*ethpb.Attestation{aggregatedAtts[1], blockAtts[1]})
 	if err != nil {
 		t.Fatal(err)
 	}
 	wanted = append(wanted, aggregated...)
-	aggregated, err = helpers.AggregateAttestations([]*ethpb.Attestation{unaggregatedAtts[2], aggregatedAtts[2], blockAtts[2]})
+	aggregated, err = attaggregation.Aggregate([]*ethpb.Attestation{aggregatedAtts[2], blockAtts[2]})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	wanted = append(wanted, aggregated...)
+	if err := s.pool.AggregateUnaggregatedAttestations(); err != nil {
+		return
+	}
 	received := s.pool.ForkchoiceAttestations()
 
 	sort.Slice(received, func(i, j int) bool {
@@ -135,7 +137,7 @@ func TestBatchAttestations_Single(t *testing.T) {
 	}
 
 	sk := bls.RandKey()
-	sig := sk.Sign([]byte("dummy_test_data"), 0 /*domain*/)
+	sig := sk.Sign([]byte("dummy_test_data"))
 	mockRoot := [32]byte{}
 	d := &ethpb.AttestationData{
 		BeaconBlockRoot: mockRoot[:],
@@ -172,17 +174,18 @@ func TestBatchAttestations_Single(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wanted, err := helpers.AggregateAttestations(append(unaggregatedAtts, aggregatedAtts...))
+	wanted, err := attaggregation.Aggregate(append(aggregatedAtts, unaggregatedAtts...))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	wanted, err = helpers.AggregateAttestations(append(wanted, blockAtts...))
+	wanted, err = attaggregation.Aggregate(append(wanted, blockAtts...))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !reflect.DeepEqual(wanted, s.pool.ForkchoiceAttestations()) {
+	got := s.pool.ForkchoiceAttestations()
+	if !reflect.DeepEqual(wanted, got) {
 		t.Error("Did not aggregate and save for batch")
 	}
 }
@@ -194,7 +197,7 @@ func TestAggregateAndSaveForkChoiceAtts_Single(t *testing.T) {
 	}
 
 	sk := bls.RandKey()
-	sig := sk.Sign([]byte("dummy_test_data"), 0 /*domain*/)
+	sig := sk.Sign([]byte("dummy_test_data"))
 	mockRoot := [32]byte{}
 	d := &ethpb.AttestationData{
 		BeaconBlockRoot: mockRoot[:],
@@ -209,7 +212,7 @@ func TestAggregateAndSaveForkChoiceAtts_Single(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wanted, err := helpers.AggregateAttestations(atts)
+	wanted, err := attaggregation.Aggregate(atts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,16 +229,22 @@ func TestAggregateAndSaveForkChoiceAtts_Multiple(t *testing.T) {
 	}
 
 	sk := bls.RandKey()
-	sig := sk.Sign([]byte("dummy_test_data"), 0 /*domain*/)
+	sig := sk.Sign([]byte("dummy_test_data"))
 	mockRoot := [32]byte{}
 	d := &ethpb.AttestationData{
 		BeaconBlockRoot: mockRoot[:],
 		Source:          &ethpb.Checkpoint{Root: mockRoot[:]},
 		Target:          &ethpb.Checkpoint{Root: mockRoot[:]},
 	}
-	d1 := proto.Clone(d).(*ethpb.AttestationData)
+	d1, ok := proto.Clone(d).(*ethpb.AttestationData)
+	if !ok {
+		t.Fatal("Entity is not of type *ethpb.AttestationData")
+	}
 	d1.Slot = 1
-	d2 := proto.Clone(d).(*ethpb.AttestationData)
+	d2, ok := proto.Clone(d).(*ethpb.AttestationData)
+	if !ok {
+		t.Fatal("Entity is not of type *ethpb.AttestationData")
+	}
 	d2.Slot = 2
 
 	atts1 := []*ethpb.Attestation{
@@ -260,11 +269,11 @@ func TestAggregateAndSaveForkChoiceAtts_Multiple(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wanted, err := helpers.AggregateAttestations(atts1)
+	wanted, err := attaggregation.Aggregate(atts1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	aggregated, err := helpers.AggregateAttestations(atts2)
+	aggregated, err := attaggregation.Aggregate(atts2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,8 +305,6 @@ func TestSeenAttestations_PresentInCache(t *testing.T) {
 		t.Error("Wanted false, got true")
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
 	att2 := &ethpb.Attestation{Data: &ethpb.AttestationData{}, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x17} /* 0b00010111 */}
 	got, err = s.seen(att2)
 	if err != nil {
@@ -306,8 +313,6 @@ func TestSeenAttestations_PresentInCache(t *testing.T) {
 	if got {
 		t.Error("Wanted false, got true")
 	}
-
-	time.Sleep(100 * time.Millisecond)
 
 	att3 := &ethpb.Attestation{Data: &ethpb.AttestationData{}, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x17} /* 0b00010111 */}
 	got, err = s.seen(att3)
@@ -375,9 +380,12 @@ func TestService_seen(t *testing.T) {
 	}
 
 	for i, tt := range tests {
-		if got, _ := s.seen(tt.att); got != tt.want {
+		got, err := s.seen(tt.att)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tt.want {
 			t.Errorf("Test %d failed. Got=%v want=%v", i, got, tt.want)
 		}
-		time.Sleep(10) // Sleep briefly for cache to routine to buffer.
 	}
 }

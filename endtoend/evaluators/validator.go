@@ -6,18 +6,22 @@ import (
 
 	"github.com/pkg/errors"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/endtoend/types"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"google.golang.org/grpc"
 )
 
+var expectedParticipation = 0.95 // 95% participation to make room for fluctuations.
+
 // ValidatorsAreActive ensures the expected amount of validators are active.
-var ValidatorsAreActive = Evaluator{
+var ValidatorsAreActive = types.Evaluator{
 	Name:       "validators_active_epoch_%d",
-	Policy:     afterNthEpoch(1),
+	Policy:     allEpochs,
 	Evaluation: validatorsAreActive,
 }
 
 // ValidatorsParticipating ensures the expected amount of validators are active.
-var ValidatorsParticipating = Evaluator{
+var ValidatorsParticipating = types.Evaluator{
 	Name:       "validators_participating_epoch_%d",
 	Policy:     afterNthEpoch(2),
 	Evaluation: validatorsParticipating,
@@ -30,10 +34,18 @@ func afterNthEpoch(afterEpoch uint64) func(uint64) bool {
 	}
 }
 
-func validatorsAreActive(client eth.BeaconChainClient) error {
+// All epochs.
+func allEpochs(currentEpoch uint64) bool {
+	return true
+}
+
+func validatorsAreActive(conns ...*grpc.ClientConn) error {
+	conn := conns[0]
+	client := eth.NewBeaconChainClient(conn)
 	// Balances actually fluctuate but we just want to check initial balance.
 	validatorRequest := &eth.ListValidatorsRequest{
 		PageSize: int32(params.BeaconConfig().MinGenesisActiveValidatorCount),
+		Active:   true,
 	}
 	validators, err := client.ListValidators(context.Background(), validatorRequest)
 	if err != nil {
@@ -47,15 +59,14 @@ func validatorsAreActive(client eth.BeaconChainClient) error {
 	}
 
 	effBalanceLowCount := 0
-	activeEpochWrongCount := 0
 	exitEpochWrongCount := 0
 	withdrawEpochWrongCount := 0
 	for _, item := range validators.ValidatorList {
+		if valExited && item.Index == exitedIndice {
+			continue
+		}
 		if item.Validator.EffectiveBalance < params.BeaconConfig().MaxEffectiveBalance {
 			effBalanceLowCount++
-		}
-		if item.Validator.ActivationEpoch != 0 {
-			activeEpochWrongCount++
 		}
 		if item.Validator.ExitEpoch != params.BeaconConfig().FarFutureEpoch {
 			exitEpochWrongCount++
@@ -71,19 +82,19 @@ func validatorsAreActive(client eth.BeaconChainClient) error {
 			effBalanceLowCount,
 			params.BeaconConfig().MaxEffectiveBalance,
 		)
-	} else if activeEpochWrongCount > 0 {
-		return fmt.Errorf("%d validators did not have genesis validator epoch of 0", activeEpochWrongCount)
 	} else if exitEpochWrongCount > 0 {
 		return fmt.Errorf("%d validators did not have genesis validator exit epoch of far future epoch", exitEpochWrongCount)
-	} else if activeEpochWrongCount > 0 {
-		return fmt.Errorf("%d validators did not have genesis validator withdrawable epoch of far future epoch", activeEpochWrongCount)
+	} else if withdrawEpochWrongCount > 0 {
+		return fmt.Errorf("%d validators did not have genesis validator withdrawable epoch of far future epoch", withdrawEpochWrongCount)
 	}
 
 	return nil
 }
 
 // validatorsParticipating ensures the validators have an acceptable participation rate.
-func validatorsParticipating(client eth.BeaconChainClient) error {
+func validatorsParticipating(conns ...*grpc.ClientConn) error {
+	conn := conns[0]
+	client := eth.NewBeaconChainClient(conn)
 	validatorRequest := &eth.GetValidatorParticipationRequest{}
 	participation, err := client.GetValidatorParticipation(context.Background(), validatorRequest)
 	if err != nil {
@@ -91,7 +102,7 @@ func validatorsParticipating(client eth.BeaconChainClient) error {
 	}
 
 	partRate := participation.Participation.GlobalParticipationRate
-	expected := float32(1)
+	expected := float32(expectedParticipation)
 	if partRate < expected {
 		return fmt.Errorf(
 			"validator participation was below for epoch %d, expected %f, received: %f",

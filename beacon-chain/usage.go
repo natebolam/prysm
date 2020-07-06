@@ -9,7 +9,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 var appHelpTemplate = `NAME:
@@ -44,6 +44,10 @@ var appHelpFlagGroups = []flagGroup{
 	{
 		Name: "cmd",
 		Flags: []cli.Flag{
+			cmd.MinimalConfigFlag,
+			cmd.E2EConfigFlag,
+			cmd.CustomGenesisDelayFlag,
+			cmd.RPCMaxPageSizeFlag,
 			cmd.NoDiscovery,
 			cmd.BootstrapNode,
 			cmd.RelayNode,
@@ -55,11 +59,15 @@ var appHelpFlagGroups = []flagGroup{
 			cmd.TracingProcessNameFlag,
 			cmd.TracingEndpointFlag,
 			cmd.TraceSampleFractionFlag,
-			cmd.MonitoringPortFlag,
+			cmd.MonitoringHostFlag,
+			flags.MonitoringPortFlag,
 			cmd.DisableMonitoringFlag,
 			cmd.MaxGoroutines,
 			cmd.ForceClearDB,
 			cmd.ClearDB,
+			cmd.ConfigFileFlag,
+			cmd.ChainConfigFileFlag,
+			cmd.GrpcMaxCallRecvMsgSizeFlag,
 		},
 	},
 	{
@@ -76,21 +84,28 @@ var appHelpFlagGroups = []flagGroup{
 	{
 		Name: "beacon-chain",
 		Flags: []cli.Flag{
-			flags.NoCustomConfigFlag,
 			flags.InteropMockEth1DataVotesFlag,
 			flags.InteropGenesisStateFlag,
 			flags.DepositContractFlag,
 			flags.ContractDeploymentBlock,
-			flags.Web3ProviderFlag,
 			flags.RPCHost,
 			flags.RPCPort,
-			flags.RPCMaxPageSize,
 			flags.CertFlag,
 			flags.KeyFlag,
+			flags.DisableGRPCGateway,
+			flags.GRPCGatewayHost,
 			flags.GRPCGatewayPort,
 			flags.HTTPWeb3ProviderFlag,
 			flags.SetGCPercent,
 			flags.UnsafeSync,
+			flags.SlasherCertFlag,
+			flags.SlasherProviderFlag,
+			flags.SlotsPerArchivedPoint,
+			flags.DisableDiscv5,
+			flags.BlockBatchLimit,
+			flags.BlockBatchLimitBurstFactor,
+			flags.EnableDebugRPCEndpoints,
+			flags.SlotsPerArchivedPoint,
 		},
 	},
 	{
@@ -101,10 +116,11 @@ var appHelpFlagGroups = []flagGroup{
 			cmd.P2PHostDNS,
 			cmd.P2PMaxPeers,
 			cmd.P2PPrivKey,
-			cmd.P2PWhitelist,
+			cmd.P2PMetadata,
+			cmd.P2PAllowList,
+			cmd.P2PDenyList,
 			cmd.StaticPeers,
 			cmd.EnableUPnPFlag,
-			cmd.P2PEncoding,
 			flags.MinSyncPeers,
 		},
 	},
@@ -117,7 +133,7 @@ var appHelpFlagGroups = []flagGroup{
 	},
 	{
 		Name:  "features",
-		Flags: featureconfig.BeaconChainFlags,
+		Flags: featureconfig.ActiveFlags(featureconfig.BeaconChainFlags),
 	},
 	{
 		Name: "interop",
@@ -125,15 +141,6 @@ var appHelpFlagGroups = []flagGroup{
 			flags.InteropGenesisStateFlag,
 			flags.InteropGenesisTimeFlag,
 			flags.InteropNumValidatorsFlag,
-		},
-	},
-	{
-		Name: "archive",
-		Flags: []cli.Flag{
-			flags.ArchiveEnableFlag,
-			flags.ArchiveValidatorSetChangesFlag,
-			flags.ArchiveBlocksFlag,
-			flags.ArchiveAttestationsFlag,
 		},
 	},
 }

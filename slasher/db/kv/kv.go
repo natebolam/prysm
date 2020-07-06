@@ -1,13 +1,18 @@
+// Package kv defines a bolt-db, key-value store implementation of
+// the slasher database interface.
 package kv
 
 import (
+	"context"
 	"os"
 	"path"
 	"time"
 
-	"github.com/boltdb/bolt"
-	"github.com/dgraph-io/ristretto"
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/slasher/cache"
+	bolt "go.etcd.io/bbolt"
+	"go.opencensus.io/trace"
 )
 
 var databaseFileName = "slasher.db"
@@ -17,26 +22,34 @@ var databaseFileName = "slasher.db"
 type Store struct {
 	db               *bolt.DB
 	databasePath     string
-	spanCache        *ristretto.Cache
+	spanCache        *cache.EpochSpansCache
+	flatSpanCache    *cache.EpochFlatSpansCache
 	spanCacheEnabled bool
 }
 
 // Config options for the slasher db.
 type Config struct {
-	// SpanCacheEnabled uses span cache to detect surround slashing.
-	SpanCacheEnabled bool
-	CacheItems       int64
-	MaxCacheSize     int64
+	// SpanCacheSize determines the span map cache size.
+	SpanCacheSize int
 }
 
 // Close closes the underlying boltdb database.
 func (db *Store) Close() error {
+	db.flatSpanCache.Purge()
 	return db.db.Close()
 }
 
-// ClearSpanCache clears the MinMaxSpans cache.
+// RemoveOldestFromCache clears the oldest key out of the cache only if the cache is at max capacity.
+func (db *Store) RemoveOldestFromCache(ctx context.Context) uint64 {
+	ctx, span := trace.StartSpan(ctx, "slasherDB.removeOldestFromCache")
+	defer span.End()
+	epochRemoved := db.flatSpanCache.PruneOldest()
+	return epochRemoved
+}
+
+// ClearSpanCache clears the spans cache.
 func (db *Store) ClearSpanCache() {
-	db.spanCache.Clear()
+	db.flatSpanCache.Purge()
 }
 
 func (db *Store) update(fn func(*bolt.Tx) error) error {
@@ -79,30 +92,25 @@ func NewKVStore(dirPath string, cfg *Config) (*Store, error) {
 		return nil, err
 	}
 	datafile := path.Join(dirPath, databaseFileName)
-	boltDB, err := bolt.Open(datafile, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	boltDB, err := bolt.Open(datafile, params.BeaconIoConfig().ReadWritePermissions, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		if err == bolt.ErrTimeout {
 			return nil, errors.New("cannot obtain database lock, database may be in use by another process")
 		}
 		return nil, err
 	}
-	if cfg.CacheItems == 0 {
-		cfg.CacheItems = 20000
-	}
-	if cfg.MaxCacheSize == 0 {
-		cfg.MaxCacheSize = 2 << 30 //(2GB)
-	}
-	kv := &Store{db: boltDB, databasePath: datafile, spanCacheEnabled: cfg.SpanCacheEnabled}
-	spanCache, err := ristretto.NewCache(&ristretto.Config{
-		NumCounters: cfg.CacheItems,   // number of keys to track frequency of (10M).
-		MaxCost:     cfg.MaxCacheSize, // maximum cost of cache.
-		BufferItems: 64,               // number of keys per Get buffer.
-		OnEvict:     saveToDB(kv),
-	})
+	kv := &Store{db: boltDB, databasePath: datafile}
+	kv.EnableSpanCache(true)
+	spanCache, err := cache.NewEpochSpansCache(cfg.SpanCacheSize, persistSpanMapsOnEviction(kv))
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to start span cache")
+		return nil, errors.Wrap(err, "could not create new cache")
 	}
 	kv.spanCache = spanCache
+	flatSpanCache, err := cache.NewEpochFlatSpansCache(cfg.SpanCacheSize, persistFlatSpanMapsOnEviction(kv))
+	if err != nil {
+		return nil, errors.Wrap(err, "could not create new flat cache")
+	}
+	kv.flatSpanCache = flatSpanCache
 
 	if err := kv.db.Update(func(tx *bolt.Tx) error {
 		return createBuckets(
@@ -114,12 +122,14 @@ func NewKVStore(dirPath string, cfg *Config) (*Store, error) {
 			compressedIdxAttsBucket,
 			validatorsPublicKeysBucket,
 			validatorsMinMaxSpanBucket,
+			validatorsMinMaxSpanBucketNew,
 			slashingBucket,
 			chainDataBucket,
 		)
 	}); err != nil {
 		return nil, err
 	}
+
 	return kv, err
 }
 

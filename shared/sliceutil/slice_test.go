@@ -2,6 +2,7 @@ package sliceutil_test
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
@@ -32,21 +33,44 @@ func TestIntersectionUint64(t *testing.T) {
 	testCases := []struct {
 		setA []uint64
 		setB []uint64
+		setC []uint64
 		out  []uint64
 	}{
-		{[]uint64{2, 3, 5}, []uint64{3}, []uint64{3}},
-		{[]uint64{2, 3, 5}, []uint64{3, 5}, []uint64{3, 5}},
-		{[]uint64{2, 3, 5}, []uint64{5, 3, 2}, []uint64{5, 3, 2}},
-		{[]uint64{2, 3, 5}, []uint64{2, 3, 5}, []uint64{2, 3, 5}},
-		{[]uint64{2, 3, 5}, []uint64{}, []uint64{}},
-		{[]uint64{}, []uint64{2, 3, 5}, []uint64{}},
-		{[]uint64{}, []uint64{}, []uint64{}},
-		{[]uint64{1}, []uint64{1}, []uint64{1}},
+		{[]uint64{2, 3, 5}, []uint64{3}, []uint64{3}, []uint64{3}},
+		{[]uint64{2, 3, 5}, []uint64{3, 5}, []uint64{5}, []uint64{5}},
+		{[]uint64{2, 3, 5}, []uint64{3, 5}, []uint64{3, 5}, []uint64{3, 5}},
+		{[]uint64{2, 3, 5}, []uint64{5, 3, 2}, []uint64{3, 2, 5}, []uint64{2, 3, 5}},
+		{[]uint64{3, 2, 5}, []uint64{5, 3, 2}, []uint64{3, 2, 5}, []uint64{2, 3, 5}},
+		{[]uint64{3, 3, 5}, []uint64{5, 3, 2}, []uint64{3, 2, 5}, []uint64{3, 5}},
+		{[]uint64{2, 3, 5}, []uint64{2, 3, 5}, []uint64{2, 3, 5}, []uint64{2, 3, 5}},
+		{[]uint64{2, 3, 5}, []uint64{}, []uint64{}, []uint64{}},
+		{[]uint64{2, 3, 5}, []uint64{2, 3, 5}, []uint64{}, []uint64{}},
+		{[]uint64{2, 3}, []uint64{2, 3, 5}, []uint64{5}, []uint64{}},
+		{[]uint64{2, 2, 2}, []uint64{2, 2, 2}, []uint64{}, []uint64{}},
+		{[]uint64{}, []uint64{2, 3, 5}, []uint64{}, []uint64{}},
+		{[]uint64{}, []uint64{}, []uint64{}, []uint64{}},
+		{[]uint64{1}, []uint64{1}, []uint64{}, []uint64{}},
+		{[]uint64{1, 1, 1}, []uint64{1, 1}, []uint64{1, 2, 3}, []uint64{1}},
 	}
 	for _, tt := range testCases {
-		result := sliceutil.IntersectionUint64(tt.setA, tt.setB)
+		setA := append([]uint64{}, tt.setA...)
+		setB := append([]uint64{}, tt.setB...)
+		setC := append([]uint64{}, tt.setC...)
+		result := sliceutil.IntersectionUint64(setA, setB, setC)
+		sort.Slice(result, func(i, j int) bool {
+			return result[i] < result[j]
+		})
 		if !reflect.DeepEqual(result, tt.out) {
 			t.Errorf("got %d, want %d", result, tt.out)
+		}
+		if !reflect.DeepEqual(setA, tt.setA) {
+			t.Errorf("slice modified, got %v, want %v", setA, tt.setA)
+		}
+		if !reflect.DeepEqual(setB, tt.setB) {
+			t.Errorf("slice modified, got %v, want %v", setB, tt.setB)
+		}
+		if !reflect.DeepEqual(setC, tt.setC) {
+			t.Errorf("slice modified, got %v, want %v", setC, tt.setC)
 		}
 	}
 }
@@ -73,21 +97,44 @@ func TestIntersectionInt64(t *testing.T) {
 	testCases := []struct {
 		setA []int64
 		setB []int64
+		setC []int64
 		out  []int64
 	}{
-		{[]int64{2, 3, 5}, []int64{3}, []int64{3}},
-		{[]int64{2, 3, 5}, []int64{3, 5}, []int64{3, 5}},
-		{[]int64{2, 3, 5}, []int64{5, 3, 2}, []int64{5, 3, 2}},
-		{[]int64{2, 3, 5}, []int64{2, 3, 5}, []int64{2, 3, 5}},
-		{[]int64{2, 3, 5}, []int64{}, []int64{}},
-		{[]int64{}, []int64{2, 3, 5}, []int64{}},
-		{[]int64{}, []int64{}, []int64{}},
-		{[]int64{1}, []int64{1}, []int64{1}},
+		{[]int64{2, 3, 5}, []int64{3}, []int64{3}, []int64{3}},
+		{[]int64{2, 3, 5}, []int64{3, 5}, []int64{5}, []int64{5}},
+		{[]int64{2, 3, 5}, []int64{3, 5}, []int64{3, 5}, []int64{3, 5}},
+		{[]int64{2, 3, 5}, []int64{5, 3, 2}, []int64{3, 2, 5}, []int64{2, 3, 5}},
+		{[]int64{3, 2, 5}, []int64{5, 3, 2}, []int64{3, 2, 5}, []int64{2, 3, 5}},
+		{[]int64{3, 3, 5}, []int64{5, 3, 2}, []int64{3, 2, 5}, []int64{3, 5}},
+		{[]int64{2, 3, 5}, []int64{2, 3, 5}, []int64{2, 3, 5}, []int64{2, 3, 5}},
+		{[]int64{2, 3, 5}, []int64{}, []int64{}, []int64{}},
+		{[]int64{2, 3, 5}, []int64{2, 3, 5}, []int64{}, []int64{}},
+		{[]int64{2, 3}, []int64{2, 3, 5}, []int64{5}, []int64{}},
+		{[]int64{2, 2, 2}, []int64{2, 2, 2}, []int64{}, []int64{}},
+		{[]int64{}, []int64{2, 3, 5}, []int64{}, []int64{}},
+		{[]int64{}, []int64{}, []int64{}, []int64{}},
+		{[]int64{1}, []int64{1}, []int64{}, []int64{}},
+		{[]int64{1, 1, 1}, []int64{1, 1}, []int64{1, 2, 3}, []int64{1}},
 	}
 	for _, tt := range testCases {
-		result := sliceutil.IntersectionInt64(tt.setA, tt.setB)
+		setA := append([]int64{}, tt.setA...)
+		setB := append([]int64{}, tt.setB...)
+		setC := append([]int64{}, tt.setC...)
+		result := sliceutil.IntersectionInt64(setA, setB, setC)
+		sort.Slice(result, func(i, j int) bool {
+			return result[i] < result[j]
+		})
 		if !reflect.DeepEqual(result, tt.out) {
 			t.Errorf("got %d, want %d", result, tt.out)
+		}
+		if !reflect.DeepEqual(setA, tt.setA) {
+			t.Errorf("slice modified, got %v, want %v", setA, tt.setA)
+		}
+		if !reflect.DeepEqual(setB, tt.setB) {
+			t.Errorf("slice modified, got %v, want %v", setB, tt.setB)
+		}
+		if !reflect.DeepEqual(setC, tt.setC) {
+			t.Errorf("slice modified, got %v, want %v", setC, tt.setC)
 		}
 	}
 }
@@ -154,6 +201,26 @@ func TestUnionInt64(t *testing.T) {
 	want := []int64{3, 4, 5, 6, 7, 8, 9, 10, 11}
 	if !reflect.DeepEqual(want, variadicResult) {
 		t.Errorf("Received %v, wanted %v", variadicResult, want)
+	}
+}
+
+func TestCleanUint64(t *testing.T) {
+	testCases := []struct {
+		in  []uint64
+		out []uint64
+	}{
+		{[]uint64{2, 4, 4, 6, 6}, []uint64{2, 4, 6}},
+		{[]uint64{3, 5, 5}, []uint64{3, 5}},
+		{[]uint64{2, 2, 2}, []uint64{2}},
+		{[]uint64{1, 4, 5, 9, 9}, []uint64{1, 4, 5, 9}},
+		{[]uint64{}, []uint64{}},
+		{[]uint64{1}, []uint64{1}},
+	}
+	for _, tt := range testCases {
+		result := sliceutil.SetUint64(tt.in)
+		if !reflect.DeepEqual(result, tt.out) {
+			t.Errorf("got %d, want %d", result, tt.out)
+		}
 	}
 }
 
@@ -288,10 +355,12 @@ func TestUnionByteSlices(t *testing.T) {
 
 func TestIntersectionByteSlices(t *testing.T) {
 	testCases := []struct {
+		name   string
 		input  [][][]byte
 		result [][]byte
 	}{
 		{
+			name: "intersect with empty set",
 			input: [][][]byte{
 				{
 					{1, 2, 3},
@@ -301,11 +370,12 @@ func TestIntersectionByteSlices(t *testing.T) {
 					{1, 2},
 					{4, 5},
 				},
+				{},
 			},
-			result: [][]byte{{4, 5}},
+			result: [][]byte{},
 		},
-		// Ensure duplicate elements are removed in the resulting set.
 		{
+			name: "ensure duplicate elements are removed in the resulting set",
 			input: [][][]byte{
 				{
 					{1, 2, 3},
@@ -317,15 +387,22 @@ func TestIntersectionByteSlices(t *testing.T) {
 					{4, 5},
 					{4, 5},
 				},
+				{
+					{4, 5},
+					{4, 5},
+				},
 			},
 			result: [][]byte{{4, 5}},
 		},
-		// Ensure no intersection returns an empty set.
 		{
+			name: "ensure no intersection returns an empty set",
 			input: [][][]byte{
 				{
 					{1, 2, 3},
 					{4, 5},
+				},
+				{
+					{1, 2},
 				},
 				{
 					{1, 2},
@@ -333,9 +410,12 @@ func TestIntersectionByteSlices(t *testing.T) {
 			},
 			result: [][]byte{},
 		},
-		//  Intersection between A and A should return A.
 		{
+			name: "intersection between A and A should return A",
 			input: [][][]byte{
+				{
+					{1, 2},
+				},
 				{
 					{1, 2},
 				},
@@ -347,12 +427,25 @@ func TestIntersectionByteSlices(t *testing.T) {
 		},
 	}
 	for _, tt := range testCases {
-		result := sliceutil.IntersectionByteSlices(tt.input...)
-		if !reflect.DeepEqual(result, tt.result) {
-			t.Errorf("IntersectionByteSlices(%v)=%v, wanted: %v",
-				tt.input, result, tt.result)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			result := sliceutil.IntersectionByteSlices(tt.input...)
+			if !reflect.DeepEqual(result, tt.result) {
+				t.Errorf("IntersectionByteSlices(%v)=%v, wanted: %v",
+					tt.input, result, tt.result)
+			}
+		})
 	}
+	t.Run("properly handle duplicates", func(t *testing.T) {
+		input := [][][]byte{
+			{{1, 2}, {1, 2}},
+			{{1, 2}, {1, 2}},
+			{},
+		}
+		result := sliceutil.IntersectionByteSlices(input...)
+		if !reflect.DeepEqual(result, [][]byte{}) {
+			t.Errorf("IntersectionByteSlices(%v)=%v, wanted: %v", input, result, [][]byte{})
+		}
+	})
 }
 
 func TestSplitCommaSeparated(t *testing.T) {

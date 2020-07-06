@@ -1,3 +1,6 @@
+// Package main defines slasher server implementation for eth2. A slasher
+// listens for all broadcasted messages using a running beacon node in order
+// to detect malicious attestations and block proposals.
 package main
 
 import (
@@ -8,25 +11,27 @@ import (
 	joonix "github.com/joonix/log"
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/logutil"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/prysmaticlabs/prysm/slasher/flags"
 	"github.com/prysmaticlabs/prysm/slasher/node"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v2/altsrc"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 )
 
 var log = logrus.WithField("prefix", "main")
 
-func startSlasher(ctx *cli.Context) error {
-	verbosity := ctx.GlobalString(cmd.VerbosityFlag.Name)
+func startSlasher(cliCtx *cli.Context) error {
+	verbosity := cliCtx.String(cmd.VerbosityFlag.Name)
 	level, err := logrus.ParseLevel(verbosity)
 	if err != nil {
 		return err
 	}
 	logrus.SetLevel(level)
-	slasher, err := node.NewSlasherNode(ctx)
+	slasher, err := node.NewSlasherNode(cliCtx)
 	if err != nil {
 		return err
 	}
@@ -35,18 +40,22 @@ func startSlasher(ctx *cli.Context) error {
 }
 
 var appFlags = []cli.Flag{
+	cmd.MinimalConfigFlag,
+	cmd.E2EConfigFlag,
+	cmd.RPCMaxPageSizeFlag,
 	cmd.VerbosityFlag,
 	cmd.DataDirFlag,
 	cmd.EnableTracingFlag,
 	cmd.TracingProcessNameFlag,
 	cmd.TracingEndpointFlag,
 	cmd.TraceSampleFractionFlag,
-	cmd.BootstrapNode,
-	cmd.MonitoringPortFlag,
+	cmd.MonitoringHostFlag,
+	flags.MonitoringPortFlag,
 	cmd.LogFileName,
 	cmd.LogFormat,
 	cmd.ClearDB,
 	cmd.ForceClearDB,
+	cmd.ConfigFileFlag,
 	debug.PProfFlag,
 	debug.PProfAddrFlag,
 	debug.PProfPortFlag,
@@ -54,22 +63,37 @@ var appFlags = []cli.Flag{
 	debug.CPUProfileFlag,
 	debug.TraceFlag,
 	flags.RPCPort,
+	flags.RPCHost,
+	flags.CertFlag,
 	flags.KeyFlag,
-	flags.UseSpanCacheFlag,
 	flags.RebuildSpanMapsFlag,
 	flags.BeaconCertFlag,
 	flags.BeaconRPCProviderFlag,
 }
 
+func init() {
+	appFlags = cmd.WrapFlags(append(appFlags, featureconfig.SlasherFlags...))
+}
+
 func main() {
-	app := cli.NewApp()
+	app := cli.App{}
 	app.Name = "hash slinging slasher"
 	app.Usage = `launches an Ethereum Serenity slasher server that interacts with a beacon chain.`
 	app.Version = version.GetVersion()
 	app.Flags = appFlags
 	app.Action = startSlasher
 	app.Before = func(ctx *cli.Context) error {
-		format := ctx.GlobalString(cmd.LogFormat.Name)
+		// Load any flags from file, if specified.
+		if ctx.IsSet(cmd.ConfigFileFlag.Name) {
+			if err := altsrc.InitInputSourceWithContext(
+				appFlags,
+				altsrc.NewYamlSourceFromFlagFunc(
+					cmd.ConfigFileFlag.Name))(ctx); err != nil {
+				return err
+			}
+		}
+
+		format := ctx.String(cmd.LogFormat.Name)
 		switch format {
 		case "text":
 			formatter := new(prefixed.TextFormatter)
@@ -77,7 +101,7 @@ func main() {
 			formatter.FullTimestamp = true
 			// If persistent log files are written - we disable the log messages coloring because
 			// the colors are ANSI codes and seen as Gibberish in the log files.
-			formatter.DisableColors = ctx.GlobalString(cmd.LogFileName.Name) != ""
+			formatter.DisableColors = ctx.String(cmd.LogFileName.Name) != ""
 			logrus.SetFormatter(formatter)
 			break
 		case "fluentd":
@@ -90,7 +114,7 @@ func main() {
 			return fmt.Errorf("unknown log format %s", format)
 		}
 
-		logFileName := ctx.GlobalString(cmd.LogFileName.Name)
+		logFileName := ctx.String(cmd.LogFileName.Name)
 		if logFileName != "" {
 			if err := logutil.ConfigurePersistentLogging(logFileName); err != nil {
 				log.WithError(err).Error("Failed to configuring logging to disk.")

@@ -9,6 +9,7 @@ import (
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/attestationutil"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/traceutil"
 	"go.opencensus.io/trace"
 )
@@ -23,7 +24,7 @@ func ProcessAttestations(
 	ctx context.Context,
 	state *stateTrie.BeaconState,
 	vp []*Validator,
-	bp *Balance,
+	pBal *Balance,
 ) ([]*Validator, *Balance, error) {
 	ctx, span := trace.StartSpan(ctx, "precomputeEpoch.ProcessAttestations")
 	defer span.End()
@@ -47,17 +48,14 @@ func ProcessAttestations(
 		if err != nil {
 			return nil, nil, err
 		}
-		indices, err := attestationutil.AttestingIndices(a.AggregationBits, committee)
-		if err != nil {
-			return nil, nil, err
-		}
+		indices := attestationutil.AttestingIndices(a.AggregationBits, committee)
 		vp = UpdateValidator(vp, v, indices, a, a.Data.Slot)
 	}
 
-	bp = UpdateBalance(vp, bp)
-	Balances = bp
+	pBal = UpdateBalance(vp, pBal)
+	Balances = pBal
 
-	return vp, bp, nil
+	return vp, pBal, nil
 }
 
 // AttestedCurrentEpoch returns true if attestation `a` attested once in current epoch and/or epoch boundary block.
@@ -93,12 +91,14 @@ func AttestedPrevEpoch(s *stateTrie.BeaconState, a *pb.PendingAttestation) (bool
 			votedTarget = true
 		}
 
-		same, err = SameHead(s, a)
-		if err != nil {
-			return false, false, false, errors.Wrap(err, "could not check same head")
-		}
-		if same {
-			votedHead = true
+		if votedTarget {
+			same, err = SameHead(s, a)
+			if err != nil {
+				return false, false, false, errors.Wrap(err, "could not check same head")
+			}
+			if same {
+				votedHead = true
+			}
 		}
 	}
 	return votedPrevEpoch, votedTarget, votedHead, nil
@@ -159,25 +159,54 @@ func UpdateValidator(vp []*Validator, record *Validator, indices []uint64, a *pb
 }
 
 // UpdateBalance updates pre computed balance store.
-func UpdateBalance(vp []*Validator, bp *Balance) *Balance {
+func UpdateBalance(vp []*Validator, bBal *Balance) *Balance {
 	for _, v := range vp {
 		if !v.IsSlashed {
 			if v.IsCurrentEpochAttester {
-				bp.CurrentEpochAttesters += v.CurrentEpochEffectiveBalance
+				bBal.CurrentEpochAttested += v.CurrentEpochEffectiveBalance
 			}
 			if v.IsCurrentEpochTargetAttester {
-				bp.CurrentEpochTargetAttesters += v.CurrentEpochEffectiveBalance
+				bBal.CurrentEpochTargetAttested += v.CurrentEpochEffectiveBalance
 			}
 			if v.IsPrevEpochAttester {
-				bp.PrevEpochAttesters += v.CurrentEpochEffectiveBalance
+				bBal.PrevEpochAttested += v.CurrentEpochEffectiveBalance
 			}
 			if v.IsPrevEpochTargetAttester {
-				bp.PrevEpochTargetAttesters += v.CurrentEpochEffectiveBalance
+				bBal.PrevEpochTargetAttested += v.CurrentEpochEffectiveBalance
 			}
 			if v.IsPrevEpochHeadAttester {
-				bp.PrevEpochHeadAttesters += v.CurrentEpochEffectiveBalance
+				bBal.PrevEpochHeadAttested += v.CurrentEpochEffectiveBalance
 			}
 		}
 	}
-	return bp
+
+	return EnsureBalancesLowerBound(bBal)
+}
+
+// EnsureBalancesLowerBound ensures all the balances such as active current epoch, active previous epoch and more
+// have EffectiveBalanceIncrement(1 eth) as a lower bound.
+func EnsureBalancesLowerBound(bBal *Balance) *Balance {
+	ebi := params.BeaconConfig().EffectiveBalanceIncrement
+	if ebi > bBal.ActiveCurrentEpoch {
+		bBal.ActiveCurrentEpoch = ebi
+	}
+	if ebi > bBal.ActivePrevEpoch {
+		bBal.ActivePrevEpoch = ebi
+	}
+	if ebi > bBal.CurrentEpochAttested {
+		bBal.CurrentEpochAttested = ebi
+	}
+	if ebi > bBal.CurrentEpochTargetAttested {
+		bBal.CurrentEpochTargetAttested = ebi
+	}
+	if ebi > bBal.PrevEpochAttested {
+		bBal.PrevEpochAttested = ebi
+	}
+	if ebi > bBal.PrevEpochTargetAttested {
+		bBal.PrevEpochTargetAttested = ebi
+	}
+	if ebi > bBal.PrevEpochHeadAttested {
+		bBal.PrevEpochHeadAttested = ebi
+	}
+	return bBal
 }

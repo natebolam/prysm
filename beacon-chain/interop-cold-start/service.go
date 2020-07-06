@@ -1,21 +1,26 @@
+// Package interopcoldstart allows for spinning up a deterministic
+// local chain without the need for eth1 deposits useful for
+// local client development and interoperability testing.
 package interopcoldstart
 
 import (
 	"context"
 	"io/ioutil"
 	"math/big"
+	"time"
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache/depositcache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared"
 	"github.com/prysmaticlabs/prysm/shared/interop"
+	"github.com/prysmaticlabs/prysm/shared/slotutil"
 )
 
 var _ = shared.Service(&Service{})
@@ -68,7 +73,7 @@ func NewColdStartService(ctx context.Context, cfg *Config) *Service {
 			log.Fatalf("Could not read pre-loaded state: %v", err)
 		}
 		genesisState := &pb.BeaconState{}
-		if err := ssz.Unmarshal(data, genesisState); err != nil {
+		if err := genesisState.UnmarshalSSZ(data); err != nil {
 			log.Fatalf("Could not unmarshal pre-loaded state: %v", err)
 		}
 		genesisTrie, err := stateTrie.InitializeFromProto(genesisState)
@@ -94,6 +99,7 @@ func NewColdStartService(ctx context.Context, cfg *Config) *Service {
 		// Generated genesis time; fetch it
 		s.genesisTime = genesisTrie.GenesisTime()
 	}
+	go slotutil.CountdownToGenesis(ctx, time.Unix(int64(s.genesisTime), 0), s.numValidators)
 
 	if err := s.saveGenesisState(ctx, genesisTrie); err != nil {
 		log.Fatalf("Could not save interop genesis state %v", err)
@@ -153,12 +159,12 @@ func (s *Service) DepositsNumberAndRootAtHeight(ctx context.Context, blockHeight
 
 func (s *Service) saveGenesisState(ctx context.Context, genesisState *stateTrie.BeaconState) error {
 	s.chainStartDeposits = make([]*ethpb.Deposit, genesisState.NumValidators())
-	stateRoot, err := genesisState.HashTreeRoot()
+	stateRoot, err := genesisState.HashTreeRoot(ctx)
 	if err != nil {
 		return err
 	}
 	genesisBlk := blocks.NewGenesisBlock(stateRoot[:])
-	genesisBlkRoot, err := ssz.HashTreeRoot(genesisBlk.Block)
+	genesisBlkRoot, err := stateutil.BlockRoot(genesisBlk.Block)
 	if err != nil {
 		return errors.Wrap(err, "could not get genesis block root")
 	}
@@ -166,28 +172,35 @@ func (s *Service) saveGenesisState(ctx context.Context, genesisState *stateTrie.
 	if err := s.beaconDB.SaveBlock(ctx, genesisBlk); err != nil {
 		return errors.Wrap(err, "could not save genesis block")
 	}
+	if err := s.beaconDB.SaveStateSummary(ctx, &pb.StateSummary{
+		Slot: 0,
+		Root: genesisBlkRoot[:],
+	}); err != nil {
+		return err
+	}
 	if err := s.beaconDB.SaveState(ctx, genesisState, genesisBlkRoot); err != nil {
 		return errors.Wrap(err, "could not save genesis state")
 	}
 	if err := s.beaconDB.SaveGenesisBlockRoot(ctx, genesisBlkRoot); err != nil {
-		return errors.Wrap(err, "could save genesis block root")
+		return errors.Wrap(err, "could not save genesis block root")
 	}
 	if err := s.beaconDB.SaveHeadBlockRoot(ctx, genesisBlkRoot); err != nil {
 		return errors.Wrap(err, "could not save head block root")
 	}
 	genesisCheckpoint := &ethpb.Checkpoint{Root: genesisBlkRoot[:]}
 	if err := s.beaconDB.SaveJustifiedCheckpoint(ctx, genesisCheckpoint); err != nil {
-		return errors.Wrap(err, "could save justified checkpoint")
+		return errors.Wrap(err, "could not save justified checkpoint")
 	}
 	if err := s.beaconDB.SaveFinalizedCheckpoint(ctx, genesisCheckpoint); err != nil {
-		return errors.Wrap(err, "could save finalized checkpoint")
+		return errors.Wrap(err, "could not save finalized checkpoint")
 	}
 
+	pubKeys := make([][48]byte, 0, genesisState.NumValidators())
+	indices := make([]uint64, 0, genesisState.NumValidators())
 	for i := uint64(0); i < uint64(genesisState.NumValidators()); i++ {
 		pk := genesisState.PubkeyAtIndex(i)
-		if err := s.beaconDB.SaveValidatorIndex(ctx, pk[:], i); err != nil {
-			return errors.Wrapf(err, "could not save validator index: %d", i)
-		}
+		pubKeys = append(pubKeys, pk)
+		indices = append(indices, i)
 		s.chainStartDeposits[i] = &ethpb.Deposit{
 			Data: &ethpb.Deposit_Data{
 				PublicKey: pk[:],

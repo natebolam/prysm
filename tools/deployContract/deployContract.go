@@ -18,7 +18,7 @@ import (
 	contracts "github.com/prysmaticlabs/prysm/contracts/deposit-contract"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8s "k8s.io/client-go/kubernetes"
@@ -40,44 +40,44 @@ func main() {
 	logrus.SetFormatter(customFormatter)
 	log := logrus.WithField("prefix", "main")
 
-	app := cli.NewApp()
+	app := cli.App{}
 	app.Name = "deployDepositContract"
 	app.Usage = "this is a util to deploy deposit contract"
 	app.Version = version.GetVersion()
 	app.Flags = []cli.Flag{
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "keystoreUTCPath",
 			Usage:       "Location of keystore",
 			Destination: &keystoreUTCPath,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "ipcPath",
 			Usage:       "Filename for IPC socket/pipe within the datadir",
 			Destination: &ipcPath,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "httpPath",
 			Value:       "http://localhost:8545/",
 			Usage:       "HTTP-RPC server listening interface",
 			Destination: &httpPath,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "passwordFile",
 			Value:       "./password.txt",
 			Usage:       "Password file for unlock account",
 			Destination: &passwordFile,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "privKey",
 			Usage:       "Private key to unlock account",
 			Destination: &privKeyString,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "k8sConfig",
 			Usage:       "Name of kubernetes config map to update with the contract address",
 			Destination: &k8sConfigMapName,
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:        "drainAddress",
 			Value:       "",
 			Usage:       "The drain address to specify in the contract. The default will be msg.sender",
@@ -85,7 +85,7 @@ func main() {
 		},
 	}
 
-	app.Action = func(c *cli.Context) {
+	app.Action = func(c *cli.Context) error {
 		// Set up RPC client
 		var rpcClient *rpc.Client
 		var err error
@@ -98,7 +98,7 @@ func main() {
 			rpcClient, err = rpc.Dial(ipcPath)
 		}
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		client := ethclient.NewClient(rpcClient)
@@ -117,7 +117,7 @@ func main() {
 			// #nosec - Inclusion of file via variable is OK for this tool.
 			file, err := os.Open(passwordFile)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 
 			scanner := bufio.NewScanner(file)
@@ -128,11 +128,11 @@ func main() {
 			// #nosec - Inclusion of file via variable is OK for this tool.
 			keyJSON, err := ioutil.ReadFile(keystoreUTCPath)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 			privKey, err := keystore.DecryptKey(keyJSON, password)
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 
 			txOps = bind.NewKeyedTransactor(privKey.PrivateKey)
@@ -155,13 +155,13 @@ func main() {
 		)
 
 		if err != nil {
-			log.Fatal(err)
+			return err
 		}
 
 		// Wait for contract to mine
 		for pending := true; pending; _, pending, err = client.TransactionByHash(context.Background(), tx.Hash()) {
 			if err != nil {
-				log.Fatal(err)
+				return err
 			}
 			time.Sleep(1 * time.Second)
 		}
@@ -171,12 +171,13 @@ func main() {
 		}).Info("New contract deployed")
 
 		if k8sConfigMapName != "" {
-			if err := updateKubernetesConfigMap(addr.Hex()); err != nil {
+			if err := updateKubernetesConfigMap(context.Background(), addr.Hex()); err != nil {
 				log.Fatalf("Failed to update kubernetes config map: %v", err)
 			} else {
 				log.Printf("Updated config map %s", k8sConfigMapName)
 			}
 		}
+		return nil
 	}
 
 	err := app.Run(os.Args)
@@ -187,7 +188,7 @@ func main() {
 
 // updateKubernetesConfigMap in the beacon-chain namespace. This specifically
 // updates the data value for DEPOSIT_CONTRACT_ADDRESS.
-func updateKubernetesConfigMap(contractAddr string) error {
+func updateKubernetesConfigMap(ctx context.Context, contractAddr string) error {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		return err
@@ -198,7 +199,7 @@ func updateKubernetesConfigMap(contractAddr string) error {
 		return err
 	}
 
-	cm, err := client.CoreV1().ConfigMaps("beacon-chain").Get("beacon-config", metav1.GetOptions{})
+	cm, err := client.CoreV1().ConfigMaps("beacon-chain").Get(ctx, "beacon-config", metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
@@ -208,7 +209,7 @@ func updateKubernetesConfigMap(contractAddr string) error {
 	}
 	cm.Data["DEPOSIT_CONTRACT_ADDRESS"] = contractAddr
 
-	_, err = client.CoreV1().ConfigMaps("beacon-chain").Update(cm)
+	_, err = client.CoreV1().ConfigMaps("beacon-chain").Update(ctx, cm, metav1.UpdateOptions{})
 
 	return err
 }

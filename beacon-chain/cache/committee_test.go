@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -96,6 +97,31 @@ func TestCommitteeCache_ActiveIndices(t *testing.T) {
 	}
 }
 
+func TestCommitteeCache_ActiveCount(t *testing.T) {
+	cache := NewCommitteesCache()
+
+	item := &Committees{Seed: [32]byte{'A'}, SortedIndices: []uint64{1, 2, 3, 4, 5, 6}}
+	count, err := cache.ActiveIndicesCount(item.Seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Error("Expected active count not to exist in empty cache")
+	}
+
+	if err := cache.AddCommitteeShuffledList(item); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err = cache.ActiveIndicesCount(item.Seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != len(item.SortedIndices) {
+		t.Error("Did not receive correct active acount from cache")
+	}
+}
+
 func TestCommitteeCache_AddProposerIndicesList(t *testing.T) {
 	cache := NewCommitteesCache()
 
@@ -156,7 +182,7 @@ func TestCommitteeCache_CanRotate(t *testing.T) {
 	}
 
 	k := cache.CommitteeCache.ListKeys()
-	if len(k) != maxCommitteesCacheSize {
+	if uint64(len(k)) != maxCommitteesCacheSize {
 		t.Errorf("wanted: %d, got: %d", maxCommitteesCacheSize, len(k))
 	}
 
@@ -170,5 +196,24 @@ func TestCommitteeCache_CanRotate(t *testing.T) {
 	s = bytesutil.ToBytes32([]byte(strconv.Itoa(199)))
 	if k[len(k)-1] != key(s) {
 		t.Error("incorrect key received for slot 199")
+	}
+}
+
+func TestCommitteeCacheOutOfRange(t *testing.T) {
+	cache := NewCommitteesCache()
+	seed := bytesutil.ToBytes32([]byte("foo"))
+	err := cache.CommitteeCache.Add(&Committees{
+		CommitteeCount:  1,
+		Seed:            seed,
+		ShuffledIndices: []uint64{0},
+		SortedIndices:   []uint64{},
+		ProposerIndices: []uint64{},
+	})
+	if err != nil {
+		t.Error(err)
+	}
+	_, err = cache.Committee(0, seed, math.MaxUint64) // Overflow!
+	if err == nil {
+		t.Fatal("Did not fail as expected")
 	}
 }

@@ -2,6 +2,7 @@ package beacon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -9,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	cache "github.com/patrickmn/go-cache"
+	"github.com/patrickmn/go-cache"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
@@ -24,7 +25,6 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -298,11 +298,7 @@ func (is *infostream) generateValidatorInfo(pubKey []byte, validators []*state.R
 
 	// Index
 	var ok bool
-	var err error
-	info.Index, ok, err = is.beaconDB.ValidatorIndex(is.ctx, pubKey)
-	if err != nil {
-		return nil, status.Error(codes.Internal, "Failed to obtain validator index")
-	}
+	info.Index, ok = headState.ValidatorIndexByPubkey(bytesutil.ToBytes48(pubKey))
 	if !ok {
 		// We don't know of this validator; it's either a pending deposit or totally unknown.
 		return is.generatePendingValidatorInfo(info)
@@ -335,7 +331,12 @@ func (is *infostream) generatePendingValidatorInfo(info *ethpb.ValidatorInfo) (*
 	is.eth1DepositsMutex.Lock()
 	if fetchedDeposit, exists := is.eth1Deposits.Get(key); exists {
 		eth1DepositCacheHits.Inc()
-		deposit = fetchedDeposit.(*eth1Deposit)
+		var ok bool
+		deposit, ok = fetchedDeposit.(*eth1Deposit)
+		if !ok {
+			is.eth1DepositsMutex.Unlock()
+			return nil, errors.New("cached eth1 deposit is not type *eth1Deposit")
+		}
 	} else {
 		eth1DepositCacheMisses.Inc()
 		fetchedDeposit, eth1BlockNumber := is.depositFetcher.DepositByPubkey(is.ctx, info.PublicKey)
@@ -382,8 +383,8 @@ func (is *infostream) calculateActivationTimeForPendingValidators(res []*ethpb.V
 	for _, validator := range validators {
 		if helpers.IsEligibleForActivationUsingTrie(headState, validator) {
 			pubKey := validator.PublicKey()
-			validatorIndex, ok, err := is.beaconDB.ValidatorIndex(is.ctx, pubKey[:])
-			if err == nil && ok {
+			validatorIndex, ok := headState.ValidatorIndexByPubkey(pubKey)
+			if ok {
 				pendingValidators = append(pendingValidators, validatorIndex)
 			}
 		}
@@ -402,14 +403,17 @@ func (is *infostream) calculateActivationTimeForPendingValidators(res []*ethpb.V
 
 	// Loop over epochs, roughly simulating progression.
 	for curEpoch := epoch + 1; len(sortedIndices) > 0 && len(pendingValidators) > 0; curEpoch++ {
-		toProcess, _ := helpers.ValidatorChurnLimit(numAttestingValidators)
+		toProcess, err := helpers.ValidatorChurnLimit(numAttestingValidators)
+		if err != nil {
+			log.WithError(err).Error("Failed to determine validator churn limit")
+		}
 		if toProcess > uint64(len(sortedIndices)) {
 			toProcess = uint64(len(sortedIndices))
 		}
 		for i := uint64(0); i < toProcess; i++ {
 			validator := validators[sortedIndices[i]]
 			if index, exists := pendingValidatorsMap[validator.PublicKey()]; exists {
-				res[index].TransitionTimestamp = is.epochToTimestamp(helpers.DelayedActivationExitEpoch(curEpoch))
+				res[index].TransitionTimestamp = is.epochToTimestamp(helpers.ActivationExitEpoch(curEpoch))
 				delete(pendingValidatorsMap, validator.PublicKey())
 			}
 			numAttestingValidators++
@@ -495,7 +499,12 @@ func (is *infostream) depositQueueTimestamp(eth1BlockNumber *big.Int) (uint64, e
 	is.eth1BlocktimesMutex.Lock()
 	if cachedTimestamp, exists := is.eth1Blocktimes.Get(key); exists {
 		eth1BlocktimeCacheHits.Inc()
-		blockTimestamp = cachedTimestamp.(uint64)
+		var ok bool
+		blockTimestamp, ok = cachedTimestamp.(uint64)
+		if !ok {
+			is.eth1BlocktimesMutex.Unlock()
+			return 0, errors.New("cached timestamp is not type uint64")
+		}
 	} else {
 		eth1BlocktimeCacheMisses.Inc()
 		var err error
@@ -508,10 +517,11 @@ func (is *infostream) depositQueueTimestamp(eth1BlockNumber *big.Int) (uint64, e
 	}
 	is.eth1BlocktimesMutex.Unlock()
 
-	followTime := time.Duration(params.BeaconConfig().Eth1FollowDistance*params.BeaconConfig().GoerliBlockTime) * time.Second
+	followTime := time.Duration(params.BeaconConfig().Eth1FollowDistance*params.BeaconConfig().SecondsPerETH1Block) * time.Second
 	eth1UnixTime := time.Unix(int64(blockTimestamp), 0).Add(followTime)
 
-	votingPeriod := time.Duration(params.BeaconConfig().SlotsPerEth1VotingPeriod*params.BeaconConfig().SecondsPerSlot) * time.Second
+	period := params.BeaconConfig().SlotsPerEpoch * params.BeaconConfig().EpochsPerEth1VotingPeriod
+	votingPeriod := time.Duration(period*params.BeaconConfig().SecondsPerSlot) * time.Second
 	activationTime := eth1UnixTime.Add(votingPeriod)
 	eth2Genesis := time.Unix(int64(is.genesisTime), 0)
 

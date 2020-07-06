@@ -1,4 +1,6 @@
-// Package iface exists to prevent circular dependencies when implementing the database interface.
+// Package iface defines the actual database interface used
+// by a Prysm beacon node, also containing useful, scoped interfaces such as
+// a ReadOnlyDatabase.
 package iface
 
 import (
@@ -14,7 +16,7 @@ import (
 	ethereum_beacon_p2p_v1 "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 )
 
-// ReadOnlyDatabase -- See github.com/prysmaticlabs/prysm/beacon-chain/db.ReadOnlyDatabase
+// ReadOnlyDatabase defines a struct which only has read access to database methods.
 type ReadOnlyDatabase interface {
 	// Attestation related methods.
 	AttestationsByDataRoot(ctx context.Context, attDataRoot [32]byte) ([]*eth.Attestation, error)
@@ -27,13 +29,16 @@ type ReadOnlyDatabase interface {
 	HasBlock(ctx context.Context, blockRoot [32]byte) bool
 	GenesisBlock(ctx context.Context) (*ethpb.SignedBeaconBlock, error)
 	IsFinalizedBlock(ctx context.Context, blockRoot [32]byte) bool
-	// Validator related methods.
-	ValidatorIndex(ctx context.Context, publicKey []byte) (uint64, bool, error)
-	HasValidatorIndex(ctx context.Context, publicKey []byte) bool
+	HighestSlotBlocks(ctx context.Context) ([]*ethpb.SignedBeaconBlock, error)
+	HighestSlotBlocksBelow(ctx context.Context, slot uint64) ([]*ethpb.SignedBeaconBlock, error)
 	// State related methods.
 	State(ctx context.Context, blockRoot [32]byte) (*state.BeaconState, error)
 	GenesisState(ctx context.Context) (*state.BeaconState, error)
 	HasState(ctx context.Context, blockRoot [32]byte) bool
+	StateSummary(ctx context.Context, blockRoot [32]byte) (*ethereum_beacon_p2p_v1.StateSummary, error)
+	HasStateSummary(ctx context.Context, blockRoot [32]byte) bool
+	HighestSlotStates(ctx context.Context) ([]*state.BeaconState, error)
+	HighestSlotStatesBelow(ctx context.Context, slot uint64) ([]*state.BeaconState, error)
 	// Slashing operations.
 	ProposerSlashing(ctx context.Context, slashingRoot [32]byte) (*eth.ProposerSlashing, error)
 	AttesterSlashing(ctx context.Context, slashingRoot [32]byte) (*eth.AttesterSlashing, error)
@@ -50,13 +55,17 @@ type ReadOnlyDatabase interface {
 	ArchivedCommitteeInfo(ctx context.Context, epoch uint64) (*ethereum_beacon_p2p_v1.ArchivedCommitteeInfo, error)
 	ArchivedBalances(ctx context.Context, epoch uint64) ([]uint64, error)
 	ArchivedValidatorParticipation(ctx context.Context, epoch uint64) (*eth.ValidatorParticipation, error)
+	ArchivedPointRoot(ctx context.Context, index uint64) [32]byte
+	HasArchivedPoint(ctx context.Context, index uint64) bool
+	LastArchivedIndexRoot(ctx context.Context) [32]byte
+	LastArchivedIndex(ctx context.Context) (uint64, error)
 	// Deposit contract related handlers.
 	DepositContractAddress(ctx context.Context) ([]byte, error)
 	// Powchain operations.
 	PowchainData(ctx context.Context) (*db.ETH1ChainData, error)
 }
 
-// NoHeadAccessDatabase -- See github.com/prysmaticlabs/prysm/beacon-chain/db.NoHeadAccessDatabase
+// NoHeadAccessDatabase defines a struct without access to chain head data.
 type NoHeadAccessDatabase interface {
 	ReadOnlyDatabase
 
@@ -66,28 +75,21 @@ type NoHeadAccessDatabase interface {
 	SaveAttestation(ctx context.Context, att *eth.Attestation) error
 	SaveAttestations(ctx context.Context, atts []*eth.Attestation) error
 	// Block related methods.
-	DeleteBlock(ctx context.Context, blockRoot [32]byte) error
-	DeleteBlocks(ctx context.Context, blockRoots [][32]byte) error
 	SaveBlock(ctx context.Context, block *eth.SignedBeaconBlock) error
 	SaveBlocks(ctx context.Context, blocks []*eth.SignedBeaconBlock) error
 	SaveGenesisBlockRoot(ctx context.Context, blockRoot [32]byte) error
-	// Validator related methods.
-	DeleteValidatorIndex(ctx context.Context, publicKey []byte) error
-	SaveValidatorIndex(ctx context.Context, publicKey []byte, validatorIdx uint64) error
-	SaveValidatorIndices(ctx context.Context, publicKeys [][48]byte, validatorIndices []uint64) error
 	// State related methods.
 	SaveState(ctx context.Context, state *state.BeaconState, blockRoot [32]byte) error
 	SaveStates(ctx context.Context, states []*state.BeaconState, blockRoots [][32]byte) error
 	DeleteState(ctx context.Context, blockRoot [32]byte) error
 	DeleteStates(ctx context.Context, blockRoots [][32]byte) error
+	SaveStateSummary(ctx context.Context, summary *ethereum_beacon_p2p_v1.StateSummary) error
+	SaveStateSummaries(ctx context.Context, summaries []*ethereum_beacon_p2p_v1.StateSummary) error
 	// Slashing operations.
 	SaveProposerSlashing(ctx context.Context, slashing *eth.ProposerSlashing) error
 	SaveAttesterSlashing(ctx context.Context, slashing *eth.AttesterSlashing) error
-	DeleteProposerSlashing(ctx context.Context, slashingRoot [32]byte) error
-	DeleteAttesterSlashing(ctx context.Context, slashingRoot [32]byte) error
 	// Block operations.
 	SaveVoluntaryExit(ctx context.Context, exit *eth.VoluntaryExit) error
-	DeleteVoluntaryExit(ctx context.Context, exitRoot [32]byte) error
 	// Checkpoint operations.
 	SaveJustifiedCheckpoint(ctx context.Context, checkpoint *eth.Checkpoint) error
 	SaveFinalizedCheckpoint(ctx context.Context, checkpoint *eth.Checkpoint) error
@@ -96,13 +98,15 @@ type NoHeadAccessDatabase interface {
 	SaveArchivedCommitteeInfo(ctx context.Context, epoch uint64, info *ethereum_beacon_p2p_v1.ArchivedCommitteeInfo) error
 	SaveArchivedBalances(ctx context.Context, epoch uint64, balances []uint64) error
 	SaveArchivedValidatorParticipation(ctx context.Context, epoch uint64, part *eth.ValidatorParticipation) error
+	SaveArchivedPointRoot(ctx context.Context, blockRoot [32]byte, index uint64) error
+	SaveLastArchivedIndex(ctx context.Context, index uint64) error
 	// Deposit contract related handlers.
 	SaveDepositContractAddress(ctx context.Context, addr common.Address) error
 	// Powchain operations.
 	SavePowchainData(ctx context.Context, data *db.ETH1ChainData) error
 }
 
-// HeadAccessDatabase -- See github.com/prysmaticlabs/prysm/beacon-chain/db.HeadAccessDatabase
+// HeadAccessDatabase defines a struct with access to reading chain head data.
 type HeadAccessDatabase interface {
 	NoHeadAccessDatabase
 
@@ -113,7 +117,7 @@ type HeadAccessDatabase interface {
 	HeadState(ctx context.Context) (*state.BeaconState, error)
 }
 
-// Database -- See github.com/prysmaticlabs/prysm/beacon-chain/db.Database
+// Database interface with full access.
 type Database interface {
 	io.Closer
 	HeadAccessDatabase
@@ -123,4 +127,7 @@ type Database interface {
 
 	// Backup and restore methods
 	Backup(ctx context.Context) error
+
+	// HistoricalStatesDeleted verifies historical states exist in DB.
+	HistoricalStatesDeleted(ctx context.Context) error
 }

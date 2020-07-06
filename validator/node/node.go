@@ -1,5 +1,6 @@
-// Package node defines a validator client which connects to a
-// full beacon node as part of the Ethereum Serenity specification.
+// Package node is the main process which handles the lifecycle of
+// the runtime services in a validator client process, gracefully shutting
+// everything down upon close.
 package node
 
 import (
@@ -13,6 +14,9 @@ import (
 	"syscall"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"github.com/urfave/cli/v2"
+
 	"github.com/prysmaticlabs/prysm/shared"
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
@@ -22,11 +26,10 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/tracing"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/prysmaticlabs/prysm/validator/client"
-	"github.com/prysmaticlabs/prysm/validator/db"
+	"github.com/prysmaticlabs/prysm/validator/db/kv"
 	"github.com/prysmaticlabs/prysm/validator/flags"
-	"github.com/prysmaticlabs/prysm/validator/keymanager"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
+	keymanager "github.com/prysmaticlabs/prysm/validator/keymanager/v1"
+	slashing_protection "github.com/prysmaticlabs/prysm/validator/slashing-protection"
 )
 
 var log = logrus.WithField("prefix", "node")
@@ -35,25 +38,25 @@ var log = logrus.WithField("prefix", "node")
 // the entire lifecycle of services attached to it participating in
 // Ethereum Serenity.
 type ValidatorClient struct {
-	ctx      *cli.Context
+	cliCtx   *cli.Context
 	services *shared.ServiceRegistry // Lifecycle and service store.
 	lock     sync.RWMutex
 	stop     chan struct{} // Channel to wait for termination notifications.
 }
 
 // NewValidatorClient creates a new, Ethereum Serenity validator client.
-func NewValidatorClient(ctx *cli.Context) (*ValidatorClient, error) {
+func NewValidatorClient(cliCtx *cli.Context) (*ValidatorClient, error) {
 	if err := tracing.Setup(
 		"validator", // service name
-		ctx.GlobalString(cmd.TracingProcessNameFlag.Name),
-		ctx.GlobalString(cmd.TracingEndpointFlag.Name),
-		ctx.GlobalFloat64(cmd.TraceSampleFractionFlag.Name),
-		ctx.GlobalBool(cmd.EnableTracingFlag.Name),
+		cliCtx.String(cmd.TracingProcessNameFlag.Name),
+		cliCtx.String(cmd.TracingEndpointFlag.Name),
+		cliCtx.Float64(cmd.TraceSampleFractionFlag.Name),
+		cliCtx.Bool(cmd.EnableTracingFlag.Name),
 	); err != nil {
 		return nil, err
 	}
 
-	verbosity := ctx.GlobalString(cmd.VerbosityFlag.Name)
+	verbosity := cliCtx.String(cmd.VerbosityFlag.Name)
 	level, err := logrus.ParseLevel(verbosity)
 	if err != nil {
 		return nil, err
@@ -62,25 +65,20 @@ func NewValidatorClient(ctx *cli.Context) (*ValidatorClient, error) {
 
 	registry := shared.NewServiceRegistry()
 	ValidatorClient := &ValidatorClient{
-		ctx:      ctx,
+		cliCtx:   cliCtx,
 		services: registry,
 		stop:     make(chan struct{}),
 	}
 
-	featureconfig.ConfigureValidator(ctx)
-	// Use custom config values if the --no-custom-config flag is set.
-	if !ctx.GlobalBool(flags.NoCustomConfigFlag.Name) {
-		log.Info("Using custom parameter configuration")
-		if featureconfig.Get().MinimalConfig {
-			log.Warn("Using Minimal Config")
-			params.UseMinimalConfig()
-		} else {
-			log.Warn("Using Demo Config")
-			params.UseDemoBeaconConfig()
-		}
+	if cliCtx.IsSet(cmd.ChainConfigFileFlag.Name) {
+		chainConfigFileName := cliCtx.String(cmd.ChainConfigFileFlag.Name)
+		params.LoadChainConfigFile(chainConfigFileName)
 	}
 
-	keyManager, err := selectKeyManager(ctx)
+	cmd.ConfigureValidator(cliCtx)
+	featureconfig.ConfigureValidator(cliCtx)
+
+	keyManager, err := selectKeyManager(cliCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -92,31 +90,46 @@ func NewValidatorClient(ctx *cli.Context) (*ValidatorClient, error) {
 		if len(pubKeys) == 0 {
 			log.Warn("No keys found; nothing to validate")
 		} else {
-			log.WithField("validators", len(pubKeys)).Info("Found validator keys")
+			log.WithField("validators", len(pubKeys)).Debug("Found validator keys")
 			for _, key := range pubKeys {
 				log.WithField("pubKey", fmt.Sprintf("%#x", key)).Info("Validating for public key")
 			}
 		}
 	}
 
-	clearFlag := ctx.GlobalBool(cmd.ClearDB.Name)
-	forceClearFlag := ctx.GlobalBool(cmd.ForceClearDB.Name)
+	clearFlag := cliCtx.Bool(cmd.ClearDB.Name)
+	forceClearFlag := cliCtx.Bool(cmd.ForceClearDB.Name)
+	dataDir := cliCtx.String(cmd.DataDirFlag.Name)
 	if clearFlag || forceClearFlag {
 		pubkeys, err := keyManager.FetchValidatingKeys()
 		if err != nil {
 			return nil, err
 		}
-		dataDir := ctx.GlobalString(cmd.DataDirFlag.Name)
+		if dataDir == "" {
+			dataDir = cmd.DefaultDataDir()
+			if dataDir == "" {
+				log.Fatal(
+					"Could not determine your system's HOME path, please specify a --datadir you wish " +
+						"to use for your validator data",
+				)
+			}
+
+		}
 		if err := clearDB(dataDir, pubkeys, forceClearFlag); err != nil {
 			return nil, err
 		}
 	}
+	log.WithField("databasePath", dataDir).Info("Checking DB")
 
-	if err := ValidatorClient.registerPrometheusService(ctx); err != nil {
+	if err := ValidatorClient.registerPrometheusService(); err != nil {
 		return nil, err
 	}
-
-	if err := ValidatorClient.registerClientService(ctx, keyManager); err != nil {
+	if featureconfig.Get().SlasherProtection {
+		if err := ValidatorClient.registerSlasherClientService(); err != nil {
+			return nil, err
+		}
+	}
+	if err := ValidatorClient.registerClientService(keyManager); err != nil {
 		return nil, err
 	}
 
@@ -142,15 +155,15 @@ func (s *ValidatorClient) Start() {
 		defer signal.Stop(sigc)
 		<-sigc
 		log.Info("Got interrupt, shutting down...")
-		debug.Exit(s.ctx) // Ensure trace and CPU profile data are flushed.
+		debug.Exit(s.cliCtx) // Ensure trace and CPU profile data are flushed.
 		go s.Close()
 		for i := 10; i > 0; i-- {
 			<-sigc
 			if i > 1 {
-				log.Info("Already shutting down, interrupt more to panic.", "times", i-1)
+				log.WithField("times", i-1).Info("Already shutting down, interrupt more to panic.")
 			}
 		}
-		panic("Panic closing the sharding validator")
+		panic("Panic closing the validator client")
 	}()
 
 	// Wait for stop channel to be closed.
@@ -168,24 +181,29 @@ func (s *ValidatorClient) Close() {
 	close(s.stop)
 }
 
-func (s *ValidatorClient) registerPrometheusService(ctx *cli.Context) error {
+func (s *ValidatorClient) registerPrometheusService() error {
 	service := prometheus.NewPrometheusService(
-		fmt.Sprintf(":%d", ctx.GlobalInt64(cmd.MonitoringPortFlag.Name)),
+		fmt.Sprintf("%s:%d", s.cliCtx.String(cmd.MonitoringHostFlag.Name), s.cliCtx.Int64(flags.MonitoringPortFlag.Name)),
 		s.services,
 	)
 	logrus.AddHook(prometheus.NewLogrusCollector())
 	return s.services.RegisterService(service)
 }
 
-func (s *ValidatorClient) registerClientService(ctx *cli.Context, keyManager keymanager.KeyManager) error {
-	endpoint := ctx.GlobalString(flags.BeaconRPCProviderFlag.Name)
-	dataDir := ctx.GlobalString(cmd.DataDirFlag.Name)
-	logValidatorBalances := !ctx.GlobalBool(flags.DisablePenaltyRewardLogFlag.Name)
-	emitAccountMetrics := ctx.GlobalBool(flags.AccountMetricsFlag.Name)
-	cert := ctx.GlobalString(flags.CertFlag.Name)
-	graffiti := ctx.GlobalString(flags.GraffitiFlag.Name)
-	maxCallRecvMsgSize := ctx.GlobalInt(flags.GrpcMaxCallRecvMsgSizeFlag.Name)
-	grpcRetries := ctx.GlobalUint(flags.GrpcRetriesFlag.Name)
+func (s *ValidatorClient) registerClientService(keyManager keymanager.KeyManager) error {
+	endpoint := s.cliCtx.String(flags.BeaconRPCProviderFlag.Name)
+	dataDir := s.cliCtx.String(cmd.DataDirFlag.Name)
+	logValidatorBalances := !s.cliCtx.Bool(flags.DisablePenaltyRewardLogFlag.Name)
+	emitAccountMetrics := !s.cliCtx.Bool(flags.DisableAccountMetricsFlag.Name)
+	cert := s.cliCtx.String(flags.CertFlag.Name)
+	graffiti := s.cliCtx.String(flags.GraffitiFlag.Name)
+	maxCallRecvMsgSize := s.cliCtx.Int(cmd.GrpcMaxCallRecvMsgSizeFlag.Name)
+	grpcRetries := s.cliCtx.Uint(flags.GrpcRetriesFlag.Name)
+	var sp *slashing_protection.Service
+	var protector slashing_protection.Protector
+	if err := s.services.FetchService(&sp); err == nil {
+		protector = sp
+	}
 	v, err := client.NewValidatorService(context.Background(), &client.Config{
 		Endpoint:                   endpoint,
 		DataDir:                    dataDir,
@@ -196,11 +214,35 @@ func (s *ValidatorClient) registerClientService(ctx *cli.Context, keyManager key
 		GraffitiFlag:               graffiti,
 		GrpcMaxCallRecvMsgSizeFlag: maxCallRecvMsgSize,
 		GrpcRetriesFlag:            grpcRetries,
+		GrpcHeadersFlag:            s.cliCtx.String(flags.GrpcHeadersFlag.Name),
+		Protector:                  protector,
 	})
+
 	if err != nil {
 		return errors.Wrap(err, "could not initialize client service")
 	}
 	return s.services.RegisterService(v)
+}
+func (s *ValidatorClient) registerSlasherClientService() error {
+	endpoint := s.cliCtx.String(flags.SlasherRPCProviderFlag.Name)
+	if endpoint == "" {
+		return errors.New("external slasher feature flag is set but no slasher endpoint is configured")
+
+	}
+	cert := s.cliCtx.String(flags.SlasherCertFlag.Name)
+	maxCallRecvMsgSize := s.cliCtx.Int(cmd.GrpcMaxCallRecvMsgSizeFlag.Name)
+	grpcRetries := s.cliCtx.Uint(flags.GrpcRetriesFlag.Name)
+	sp, err := slashing_protection.NewSlashingProtectionService(context.Background(), &slashing_protection.Config{
+		Endpoint:                   endpoint,
+		CertFlag:                   cert,
+		GrpcMaxCallRecvMsgSizeFlag: maxCallRecvMsgSize,
+		GrpcRetriesFlag:            grpcRetries,
+		GrpcHeadersFlag:            s.cliCtx.String(flags.GrpcHeadersFlag.Name),
+	})
+	if err != nil {
+		return errors.Wrap(err, "could not initialize client service")
+	}
+	return s.services.RegisterService(sp)
 }
 
 // selectKeyManager selects the key manager depending on the options provided by the user.
@@ -223,9 +265,9 @@ func selectKeyManager(ctx *cli.Context) (keymanager.KeyManager, error) {
 			manager = "unencrypted"
 			opts = fmt.Sprintf(`{"path":%q}`, unencryptedKeys)
 			log.Warn(fmt.Sprintf("--unencrypted-keys flag is deprecated.  Please use --keymanager=unencrypted --keymanageropts='%s'", opts))
-		} else if numValidatorKeys := ctx.GlobalUint64(flags.InteropNumValidators.Name); numValidatorKeys > 0 {
+		} else if numValidatorKeys := ctx.Uint64(flags.InteropNumValidators.Name); numValidatorKeys > 0 {
 			manager = "interop"
-			opts = fmt.Sprintf(`{"keys":%d,"offset":%d}`, numValidatorKeys, ctx.GlobalUint64(flags.InteropStartIndex.Name))
+			opts = fmt.Sprintf(`{"keys":%d,"offset":%d}`, numValidatorKeys, ctx.Uint64(flags.InteropStartIndex.Name))
 			log.Warn(fmt.Sprintf("--interop-num-validators and --interop-start-index flags are deprecated.  Please use --keymanager=interop --keymanageropts='%s'", opts))
 		} else if keystorePath := ctx.String(flags.KeystorePathFlag.Name); keystorePath != "" {
 			manager = "keystore"
@@ -256,12 +298,16 @@ func selectKeyManager(ctx *cli.Context) (keymanager.KeyManager, error) {
 		km, help, err = keymanager.NewKeystore(opts)
 	case "wallet":
 		km, help, err = keymanager.NewWallet(opts)
+	case "remote":
+		km, help, err = keymanager.NewRemoteWallet(opts)
 	default:
 		return nil, fmt.Errorf("unknown keymanager %q", manager)
 	}
 	if err != nil {
-		// Print help for the keymanager
-		fmt.Println(help)
+		if help != "" {
+			// Print help for the keymanager
+			fmt.Println(help)
+		}
 		return nil, err
 	}
 	return km, nil
@@ -277,12 +323,12 @@ func clearDB(dataDir string, pubkeys [][48]byte, force bool) error {
 		deniedText := "The historical actions database will not be deleted. No changes have been made."
 		clearDBConfirmed, err = cmd.ConfirmAction(actionText, deniedText)
 		if err != nil {
-			return errors.Wrapf(err, "Could not create DB in dir %s", dataDir)
+			return errors.Wrapf(err, "Could not clear DB in dir %s", dataDir)
 		}
 	}
 
 	if clearDBConfirmed {
-		valDB, err := db.NewKVStore(dataDir, pubkeys)
+		valDB, err := kv.NewKVStore(dataDir, pubkeys)
 		if err != nil {
 			return errors.Wrapf(err, "Could not create DB in dir %s", dataDir)
 		}
@@ -294,4 +340,13 @@ func clearDB(dataDir string, pubkeys [][48]byte, force bool) error {
 	}
 
 	return nil
+}
+
+// ExtractPublicKeysFromKeyManager extracts only the public keys from the specified key manager.
+func ExtractPublicKeysFromKeyManager(ctx *cli.Context) ([][48]byte, error) {
+	km, err := selectKeyManager(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return km.FetchValidatingKeys()
 }

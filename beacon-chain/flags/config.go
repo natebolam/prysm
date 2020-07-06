@@ -3,20 +3,17 @@ package flags
 import (
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	log "github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 // GlobalFlags specifies all the global flags for the
 // beacon node.
 type GlobalFlags struct {
-	EnableArchive                     bool
-	EnableArchivedValidatorSetChanges bool
-	EnableArchivedBlocks              bool
-	EnableArchivedAttestations        bool
-	MinimumSyncPeers                  int
-	MaxPageSize                       int
-	DeploymentBlock                   int
-	UnsafeSync                        bool
+	UnsafeSync                 bool
+	DisableDiscv5              bool
+	MinimumSyncPeers           int
+	BlockBatchLimit            int
+	BlockBatchLimitBurstFactor int
 }
 
 var globalConfig *GlobalFlags
@@ -38,31 +35,22 @@ func Init(c *GlobalFlags) {
 // based on the provided cli context.
 func ConfigureGlobalFlags(ctx *cli.Context) {
 	cfg := &GlobalFlags{}
-	if ctx.GlobalBool(ArchiveEnableFlag.Name) {
-		cfg.EnableArchive = true
-	}
-	if ctx.GlobalBool(ArchiveValidatorSetChangesFlag.Name) {
-		cfg.EnableArchivedValidatorSetChanges = true
-	}
-	if ctx.GlobalBool(ArchiveBlocksFlag.Name) {
-		cfg.EnableArchivedBlocks = true
-	}
-	if ctx.GlobalBool(ArchiveAttestationsFlag.Name) {
-		cfg.EnableArchivedAttestations = true
-	}
-	if ctx.GlobalBool(UnsafeSync.Name) {
+	if ctx.Bool(UnsafeSync.Name) {
 		cfg.UnsafeSync = true
 	}
-	cfg.MaxPageSize = ctx.GlobalInt(RPCMaxPageSize.Name)
-	cfg.DeploymentBlock = ctx.GlobalInt(ContractDeploymentBlock.Name)
+	if ctx.Bool(DisableDiscv5.Name) {
+		cfg.DisableDiscv5 = true
+	}
+	cfg.BlockBatchLimit = ctx.Int(BlockBatchLimit.Name)
+	cfg.BlockBatchLimitBurstFactor = ctx.Int(BlockBatchLimitBurstFactor.Name)
 	configureMinimumPeers(ctx, cfg)
 
 	Init(cfg)
 }
 
 func configureMinimumPeers(ctx *cli.Context, cfg *GlobalFlags) {
-	cfg.MinimumSyncPeers = ctx.GlobalInt(MinSyncPeers.Name)
-	maxPeers := int(ctx.GlobalInt64(cmd.P2PMaxPeers.Name))
+	cfg.MinimumSyncPeers = ctx.Int(MinSyncPeers.Name)
+	maxPeers := int(ctx.Int64(cmd.P2PMaxPeers.Name))
 	if cfg.MinimumSyncPeers > maxPeers {
 		log.Warnf("Changing Minimum Sync Peers to %d", maxPeers)
 		cfg.MinimumSyncPeers = maxPeers

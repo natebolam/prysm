@@ -1,10 +1,13 @@
+// Package initialsync includes all initial block download and processing
+// logic for the beacon node, using a round robin strategy and a finite-state-machine
+// to handle edge-cases in a beacon node's sync status.
 package initialsync
 
 import (
 	"context"
 	"time"
 
-	"github.com/kevinms/leakybucket-go"
+	"github.com/paulbellamy/ratecounter"
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
@@ -22,18 +25,13 @@ import (
 
 var _ = shared.Service(&Service{})
 
+// blockchainService defines the interface for interaction with block chain service.
 type blockchainService interface {
 	blockchain.BlockReceiver
 	blockchain.HeadFetcher
 	ClearCachedStates()
 	blockchain.FinalizationFetcher
 }
-
-const (
-	handshakePollingInterval = 5 * time.Second // Polling interval for checking the number of received handshakes.
-
-	allowedBlocksPerSecond = 32.0
-)
 
 // Config to set up the initial sync service.
 type Config struct {
@@ -47,27 +45,29 @@ type Config struct {
 // Service service.
 type Service struct {
 	ctx               context.Context
+	cancel            context.CancelFunc
 	chain             blockchainService
 	p2p               p2p.P2P
 	db                db.ReadOnlyDatabase
 	synced            bool
 	chainStarted      bool
 	stateNotifier     statefeed.Notifier
-	blockNotifier     blockfeed.Notifier
-	blocksRateLimiter *leakybucket.Collector
+	counter           *ratecounter.RateCounter
+	lastProcessedSlot uint64
 }
 
 // NewInitialSync configures the initial sync service responsible for bringing the node up to the
 // latest head of the blockchain.
 func NewInitialSync(cfg *Config) *Service {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{
-		ctx:               context.Background(),
-		chain:             cfg.Chain,
-		p2p:               cfg.P2P,
-		db:                cfg.DB,
-		stateNotifier:     cfg.StateNotifier,
-		blockNotifier:     cfg.BlockNotifier,
-		blocksRateLimiter: leakybucket.NewCollector(allowedBlocksPerSecond, allowedBlocksPerSecond, false /* deleteEmptyBuckets */),
+		ctx:           ctx,
+		cancel:        cancel,
+		chain:         cfg.Chain,
+		p2p:           cfg.P2P,
+		db:            cfg.DB,
+		stateNotifier: cfg.StateNotifier,
+		counter:       ratecounter.NewRateCounter(counterSeconds * time.Second),
 	}
 }
 
@@ -80,13 +80,25 @@ func (s *Service) Start() {
 		// Wait for state to be initialized.
 		stateChannel := make(chan *feed.Event, 1)
 		stateSub := s.stateNotifier.StateFeed().Subscribe(stateChannel)
+		// We have two instances in which we call unsubscribe. The first
+		// instance below is to account for the fact that we exit
+		// the for-select loop through a return when we receive a closed
+		// context or error from our subscription. The only way to correctly
+		// close the subscription would be through a defer. The second instance we
+		// call unsubscribe when we have already received the state
+		// initialized event and are proceeding with the main synchronization
+		// routine.
 		defer stateSub.Unsubscribe()
 		genesisSet := false
 		for !genesisSet {
 			select {
 			case event := <-stateChannel:
 				if event.Type == statefeed.Initialized {
-					data := event.Data.(*statefeed.InitializedData)
+					data, ok := event.Data.(*statefeed.InitializedData)
+					if !ok {
+						log.Error("Event feed data is not type *statefeed.InitializedData")
+						continue
+					}
 					log.WithField("starttime", data.StartTime).Debug("Received state initialized event")
 					genesis = data.StartTime
 					genesisSet = true
@@ -105,24 +117,40 @@ func (s *Service) Start() {
 	}
 
 	if genesis.After(roughtime.Now()) {
-		log.WithField(
-			"genesis time",
-			genesis,
-		).Warn("Genesis time is in the future - waiting to start sync...")
-		time.Sleep(roughtime.Until(genesis))
-	}
-	s.chainStarted = true
-	currentSlot := helpers.SlotsSince(genesis)
-	if helpers.SlotToEpoch(currentSlot) == 0 {
-		log.Info("Chain started within the last epoch - not syncing")
 		s.synced = true
+		s.stateNotifier.StateFeed().Send(&feed.Event{
+			Type: statefeed.Synced,
+			Data: &statefeed.SyncedData{
+				StartTime: genesis,
+			},
+		})
+		log.WithField("genesisTime", genesis).Info("Chain started within the last epoch - not syncing")
 		return
 	}
+	currentSlot := helpers.SlotsSince(genesis)
+	if helpers.SlotToEpoch(currentSlot) == 0 {
+		log.WithField("genesisTime", genesis).Info("Chain started within the last epoch - not syncing")
+		s.synced = true
+		s.stateNotifier.StateFeed().Send(&feed.Event{
+			Type: statefeed.Synced,
+			Data: &statefeed.SyncedData{
+				StartTime: genesis,
+			},
+		})
+		return
+	}
+	s.chainStarted = true
 	log.Info("Starting initial chain sync...")
 	// Are we already in sync, or close to it?
 	if helpers.SlotToEpoch(s.chain.HeadSlot()) == helpers.SlotToEpoch(currentSlot) {
 		log.Info("Already synced to the current chain head")
 		s.synced = true
+		s.stateNotifier.StateFeed().Send(&feed.Event{
+			Type: statefeed.Synced,
+			Data: &statefeed.SyncedData{
+				StartTime: genesis,
+			},
+		})
 		return
 	}
 	s.waitForMinimumPeers()
@@ -131,10 +159,17 @@ func (s *Service) Start() {
 	}
 	log.Infof("Synced up to slot %d", s.chain.HeadSlot())
 	s.synced = true
+	s.stateNotifier.StateFeed().Send(&feed.Event{
+		Type: statefeed.Synced,
+		Data: &statefeed.SyncedData{
+			StartTime: genesis,
+		},
+	})
 }
 
 // Stop initial sync.
 func (s *Service) Stop() error {
+	s.cancel()
 	return nil
 }
 
@@ -179,13 +214,14 @@ func (s *Service) waitForMinimumPeers() {
 		required = flags.Get().MinimumSyncPeers
 	}
 	for {
-		_, _, peers := s.p2p.Peers().BestFinalized(params.BeaconConfig().MaxPeersToSync, s.chain.FinalizedCheckpt().Epoch)
+		_, peers := s.p2p.Peers().BestFinalized(params.BeaconConfig().MaxPeersToSync, s.chain.FinalizedCheckpt().Epoch)
 		if len(peers) >= required {
 			break
 		}
 		log.WithFields(logrus.Fields{
 			"suitable": len(peers),
-			"required": required}).Info("Waiting for enough suitable peers before syncing")
+			"required": required,
+		}).Info("Waiting for enough suitable peers before syncing")
 		time.Sleep(handshakePollingInterval)
 	}
 }

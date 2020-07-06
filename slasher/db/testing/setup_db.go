@@ -1,3 +1,5 @@
+// Package testing defines useful helper functions for unit tests with
+// the slasher database.
 package testing
 
 import (
@@ -23,38 +25,19 @@ func SetupSlasherDB(t testing.TB, spanCacheEnabled bool) *kv.Store {
 	if err := os.RemoveAll(p); err != nil {
 		t.Fatalf("Failed to remove directory: %v", err)
 	}
-	cfg := &kv.Config{CacheItems: 0, MaxCacheSize: 0, SpanCacheEnabled: spanCacheEnabled}
+	cfg := &kv.Config{}
 	db, err := slasherDB.NewDB(p, cfg)
 	if err != nil {
 		t.Fatalf("Failed to instantiate DB: %v", err)
 	}
+	db.EnableSpanCache(spanCacheEnabled)
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Failed to close database: %v", err)
+		}
+		if err := os.RemoveAll(db.DatabasePath()); err != nil {
+			t.Fatalf("Failed to remove directory: %v", err)
+		}
+	})
 	return db
-}
-
-// SetupSlasherDBDiffCacheSize instantiates and returns a SlasherDB instance with non default cache size.
-func SetupSlasherDBDiffCacheSize(t testing.TB, cacheItems int64, maxCacheSize int64) *kv.Store {
-	randPath, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	if err != nil {
-		t.Fatalf("Could not generate random file path: %v", err)
-	}
-	p := path.Join(testutil.TempDir(), fmt.Sprintf("/%d", randPath))
-	if err := os.RemoveAll(p); err != nil {
-		t.Fatalf("Failed to remove directory: %v", err)
-	}
-	cfg := &kv.Config{CacheItems: cacheItems, MaxCacheSize: maxCacheSize, SpanCacheEnabled: true}
-	newDB, err := slasherDB.NewDB(p, cfg)
-	if err != nil {
-		t.Fatalf("Failed to instantiate DB: %v", err)
-	}
-	return newDB
-}
-
-// TeardownSlasherDB cleans up a test SlasherDB instance.
-func TeardownSlasherDB(t testing.TB, db *kv.Store) {
-	if err := db.Close(); err != nil {
-		t.Fatalf("Failed to close database: %v", err)
-	}
-	if err := os.RemoveAll(db.DatabasePath()); err != nil {
-		t.Fatalf("Failed to remove directory: %v", err)
-	}
 }

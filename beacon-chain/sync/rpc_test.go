@@ -9,11 +9,16 @@ import (
 
 	libp2pcore "github.com/libp2p/go-libp2p-core"
 	"github.com/libp2p/go-libp2p-core/network"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/encoder"
 	p2ptest "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
 	pb "github.com/prysmaticlabs/prysm/proto/testing"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 )
+
+func init() {
+	state.SkipSlotCache.Disable()
+}
 
 // expectSuccess status code from a stream in regular sync.
 func expectSuccess(t *testing.T, r *Service, stream network.Stream) {
@@ -33,7 +38,7 @@ func expectSuccess(t *testing.T, r *Service, stream network.Stream) {
 func expectResetStream(t *testing.T, r *Service, stream network.Stream) {
 	expectedErr := "stream reset"
 	_, _, err := ReadStatusCode(stream, &encoder.SszNetworkEncoder{})
-	if err.Error() != expectedErr {
+	if err == nil || err.Error() != expectedErr {
 		t.Fatalf("Wanted this error %s but got %v instead", expectedErr, err)
 	}
 }
@@ -49,7 +54,10 @@ func TestRegisterRPC_ReceivesValidMessage(t *testing.T) {
 	wg.Add(1)
 	topic := "/testing/foobar/1"
 	handler := func(ctx context.Context, msg interface{}, stream libp2pcore.Stream) error {
-		m := msg.(*pb.TestSimpleMessage)
+		m, ok := msg.(*pb.TestSimpleMessage)
+		if !ok {
+			t.Error("Object is not of type *pb.TestSimpleMessage")
+		}
 		if !bytes.Equal(m.Foo, []byte("foo")) {
 			t.Errorf("Unexpected incoming message: %+v", m)
 		}

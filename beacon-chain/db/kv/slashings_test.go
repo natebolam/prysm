@@ -11,10 +11,26 @@ import (
 
 func TestStore_ProposerSlashing_CRUD(t *testing.T) {
 	db := setupDB(t)
-	defer teardownDB(t, db)
 	ctx := context.Background()
 	prop := &ethpb.ProposerSlashing{
-		ProposerIndex: 5,
+		Header_1: &ethpb.SignedBeaconBlockHeader{
+			Header: &ethpb.BeaconBlockHeader{
+				ProposerIndex: 5,
+				BodyRoot:      make([]byte, 32),
+				ParentRoot:    make([]byte, 32),
+				StateRoot:     make([]byte, 32),
+			},
+			Signature: make([]byte, 96),
+		},
+		Header_2: &ethpb.SignedBeaconBlockHeader{
+			Header: &ethpb.BeaconBlockHeader{
+				ProposerIndex: 5,
+				BodyRoot:      make([]byte, 32),
+				ParentRoot:    make([]byte, 32),
+				StateRoot:     make([]byte, 32),
+			},
+			Signature: make([]byte, 96),
+		},
 	}
 	slashingRoot, err := ssz.HashTreeRoot(prop)
 	if err != nil {
@@ -40,7 +56,7 @@ func TestStore_ProposerSlashing_CRUD(t *testing.T) {
 	if !proto.Equal(prop, retrieved) {
 		t.Errorf("Wanted %v, received %v", prop, retrieved)
 	}
-	if err := db.DeleteProposerSlashing(ctx, slashingRoot); err != nil {
+	if err := db.deleteProposerSlashing(ctx, slashingRoot); err != nil {
 		t.Fatal(err)
 	}
 	if db.HasProposerSlashing(ctx, slashingRoot) {
@@ -50,20 +66,37 @@ func TestStore_ProposerSlashing_CRUD(t *testing.T) {
 
 func TestStore_AttesterSlashing_CRUD(t *testing.T) {
 	db := setupDB(t)
-	defer teardownDB(t, db)
 	ctx := context.Background()
 	att := &ethpb.AttesterSlashing{
 		Attestation_1: &ethpb.IndexedAttestation{
 			Data: &ethpb.AttestationData{
 				BeaconBlockRoot: make([]byte, 32),
 				Slot:            5,
+				Source: &ethpb.Checkpoint{
+					Epoch: 0,
+					Root:  make([]byte, 32),
+				},
+				Target: &ethpb.Checkpoint{
+					Epoch: 0,
+					Root:  make([]byte, 32),
+				},
 			},
+			Signature: make([]byte, 96),
 		},
 		Attestation_2: &ethpb.IndexedAttestation{
 			Data: &ethpb.AttestationData{
 				BeaconBlockRoot: make([]byte, 32),
 				Slot:            7,
+				Source: &ethpb.Checkpoint{
+					Epoch: 0,
+					Root:  make([]byte, 32),
+				},
+				Target: &ethpb.Checkpoint{
+					Epoch: 0,
+					Root:  make([]byte, 32),
+				},
 			},
+			Signature: make([]byte, 96),
 		},
 	}
 	slashingRoot, err := ssz.HashTreeRoot(att)
@@ -90,7 +123,7 @@ func TestStore_AttesterSlashing_CRUD(t *testing.T) {
 	if !proto.Equal(att, retrieved) {
 		t.Errorf("Wanted %v, received %v", att, retrieved)
 	}
-	if err := db.DeleteAttesterSlashing(ctx, slashingRoot); err != nil {
+	if err := db.deleteAttesterSlashing(ctx, slashingRoot); err != nil {
 		t.Fatal(err)
 	}
 	if db.HasAttesterSlashing(ctx, slashingRoot) {

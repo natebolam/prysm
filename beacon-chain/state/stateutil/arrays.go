@@ -1,3 +1,5 @@
+// Package stateutil defines utility functions to compute state roots
+// using advanced merkle branch caching techniques.package stateutil
 package stateutil
 
 import (
@@ -5,9 +7,9 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/protolambda/zssz/merkle"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
+	"github.com/prysmaticlabs/prysm/shared/htrutils"
 )
 
 var (
@@ -26,13 +28,13 @@ func RootsArrayHashTreeRoot(vals [][]byte, length uint64, fieldName string) ([32
 }
 
 func (h *stateRootHasher) arraysRoot(input [][]byte, length uint64, fieldName string) ([32]byte, error) {
-	hashFunc := hashutil.CustomSHA256Hasher()
 	lock.Lock()
+	defer lock.Unlock()
+	hashFunc := hashutil.CustomSHA256Hasher()
 	if _, ok := layersCache[fieldName]; !ok && h.rootsCache != nil {
-		depth := merkle.GetDepth(length)
+		depth := htrutils.GetDepth(length)
 		layersCache[fieldName] = make([][][32]byte, depth+1)
 	}
-	lock.Unlock()
 
 	leaves := make([][32]byte, length)
 	for i, chunk := range input {
@@ -40,9 +42,7 @@ func (h *stateRootHasher) arraysRoot(input [][]byte, length uint64, fieldName st
 	}
 	bytesProcessed := 0
 	changedIndices := make([]int, 0)
-	lock.RLock()
 	prevLeaves, ok := leavesCache[fieldName]
-	lock.RUnlock()
 	if len(prevLeaves) == 0 || h.rootsCache == nil {
 		prevLeaves = leaves
 	}
@@ -75,40 +75,44 @@ func (h *stateRootHasher) arraysRoot(input [][]byte, length uint64, fieldName st
 				return [32]byte{}, err
 			}
 		}
-		lock.Lock()
 		leavesCache[fieldName] = chunks
-		lock.Unlock()
 		return rt, nil
 	}
 
 	var res [32]byte
 	res = h.merkleizeWithCache(leaves, length, fieldName, hashFunc)
 	if h.rootsCache != nil {
-		lock.Lock()
 		leavesCache[fieldName] = leaves
-		lock.Unlock()
 	}
 	return res, nil
 }
 
 func (h *stateRootHasher) merkleizeWithCache(leaves [][32]byte, length uint64,
 	fieldName string, hasher func([]byte) [32]byte) [32]byte {
-	lock.Lock()
-	defer lock.Unlock()
 	if len(leaves) == 1 {
 		var root [32]byte
 		root = leaves[0]
 		return root
 	}
 	hashLayer := leaves
-	layers := make([][][32]byte, merkle.GetDepth(length)+1)
+	layers := make([][][32]byte, htrutils.GetDepth(length)+1)
 	if items, ok := layersCache[fieldName]; ok && h.rootsCache != nil {
 		if len(items[0]) == len(leaves) {
 			layers = items
 		}
 	}
 	layers[0] = hashLayer
+	layers, hashLayer = merkleizeTrieLeaves(layers, hashLayer, hasher)
+	var root [32]byte
+	root = hashLayer[0]
+	if h.rootsCache != nil {
+		layersCache[fieldName] = layers
+	}
+	return root
+}
 
+func merkleizeTrieLeaves(layers [][][32]byte, hashLayer [][32]byte,
+	hasher func([]byte) [32]byte) ([][][32]byte, [][32]byte) {
 	// We keep track of the hash layers of a Merkle trie until we reach
 	// the top layer of length 1, which contains the single root element.
 	//        [Root]      -> Top layer has length 1.
@@ -119,29 +123,22 @@ func (h *stateRootHasher) merkleizeWithCache(leaves [][32]byte, length uint64,
 	chunkBuffer.Grow(64)
 	for len(hashLayer) > 1 && i < len(layers) {
 		layer := make([][32]byte, len(hashLayer)/2, len(hashLayer)/2)
-		for i := 0; i < len(hashLayer); i += 2 {
-			chunkBuffer.Write(hashLayer[i][:])
-			chunkBuffer.Write(hashLayer[i+1][:])
+		for j := 0; j < len(hashLayer); j += 2 {
+			chunkBuffer.Write(hashLayer[j][:])
+			chunkBuffer.Write(hashLayer[j+1][:])
 			hashedChunk := hasher(chunkBuffer.Bytes())
-			layer[i/2] = hashedChunk
+			layer[j/2] = hashedChunk
 			chunkBuffer.Reset()
 		}
 		hashLayer = layer
 		layers[i] = hashLayer
 		i++
 	}
-	var root [32]byte
-	root = hashLayer[0]
-	if h.rootsCache != nil {
-		layersCache[fieldName] = layers
-	}
-	return root
+	return layers, hashLayer
 }
 
 func recomputeRoot(idx int, chunks [][32]byte, length uint64,
 	fieldName string, hasher func([]byte) [32]byte) ([32]byte, error) {
-	lock.Lock()
-	defer lock.Unlock()
 	items, ok := layersCache[fieldName]
 	if !ok {
 		return [32]byte{}, errors.New("could not recompute root as there was no cache found")

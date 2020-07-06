@@ -3,22 +3,20 @@ package testutil
 import (
 	"context"
 	"encoding/binary"
-	"math/rand"
 	"testing"
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
-
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/rand"
 )
 
 // RandaoReveal returns a signature of the requested epoch using the beacon proposer private key.
-func RandaoReveal(beaconState *stateTrie.BeaconState, epoch uint64, privKeys []*bls.SecretKey) ([]byte, error) {
+func RandaoReveal(beaconState *stateTrie.BeaconState, epoch uint64, privKeys []bls.SecretKey) ([]byte, error) {
 	// We fetch the proposer's index as that is whom the RANDAO will be verified against.
 	proposerIdx, err := helpers.BeaconProposerIndex(beaconState)
 	if err != nil {
@@ -26,9 +24,16 @@ func RandaoReveal(beaconState *stateTrie.BeaconState, epoch uint64, privKeys []*
 	}
 	buf := make([]byte, 32)
 	binary.LittleEndian.PutUint64(buf, epoch)
-	domain := helpers.Domain(beaconState.Fork(), epoch, params.BeaconConfig().DomainRandao)
+	domain, err := helpers.Domain(beaconState.Fork(), epoch, params.BeaconConfig().DomainRandao, beaconState.GenesisValidatorRoot())
+	if err != nil {
+		return nil, err
+	}
+	root, err := helpers.ComputeSigningRoot(epoch, domain)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not compute signing root of epoch")
+	}
 	// We make the previous validator's index sign the message instead of the proposer.
-	epochSignature := privKeys[proposerIdx].Sign(buf, domain)
+	epochSignature := privKeys[proposerIdx].Sign(root[:])
 	return epochSignature.Marshal(), nil
 }
 
@@ -36,16 +41,19 @@ func RandaoReveal(beaconState *stateTrie.BeaconState, epoch uint64, privKeys []*
 func BlockSignature(
 	bState *stateTrie.BeaconState,
 	block *ethpb.BeaconBlock,
-	privKeys []*bls.SecretKey,
-) (*bls.Signature, error) {
+	privKeys []bls.SecretKey,
+) (bls.Signature, error) {
 	var err error
 	s, err := state.CalculateStateRoot(context.Background(), bState, &ethpb.SignedBeaconBlock{Block: block})
 	if err != nil {
 		return nil, err
 	}
 	block.StateRoot = s[:]
-
-	blockRoot, err := ssz.HashTreeRoot(block)
+	domain, err := helpers.Domain(bState.Fork(), helpers.CurrentEpoch(bState), params.BeaconConfig().DomainBeaconProposer, bState.GenesisValidatorRoot())
+	if err != nil {
+		return nil, err
+	}
+	blockRoot, err := helpers.ComputeSigningRoot(block, domain)
 	if err != nil {
 		return nil, err
 	}
@@ -59,17 +67,16 @@ func BlockSignature(
 	if err != nil {
 		return nil, err
 	}
-	domain := helpers.Domain(bState.Fork(), helpers.CurrentEpoch(bState), params.BeaconConfig().DomainBeaconProposer)
 	if err := bState.SetSlot(currentSlot); err != nil {
 		return nil, err
 	}
-	return privKeys[proposerIdx].Sign(blockRoot[:], domain), nil
+	return privKeys[proposerIdx].Sign(blockRoot[:]), nil
 }
 
 // Random32Bytes generates a random 32 byte slice.
 func Random32Bytes(t *testing.T) []byte {
 	b := make([]byte, 32)
-	_, err := rand.Read(b)
+	_, err := rand.NewDeterministicGenerator().Read(b)
 	if err != nil {
 		t.Fatal(err)
 	}

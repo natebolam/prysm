@@ -1,22 +1,24 @@
 package kv
 
 import (
-	"github.com/patrickmn/go-cache"
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
+	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 )
 
 // SaveForkchoiceAttestation saves an forkchoice attestation in cache.
 func (p *AttCaches) SaveForkchoiceAttestation(att *ethpb.Attestation) error {
-	r, err := ssz.HashTreeRoot(att)
+	if att == nil {
+		return nil
+	}
+	r, err := hashFn(att)
 	if err != nil {
 		return errors.Wrap(err, "could not tree hash attestation")
 	}
 
-	// DefaultExpiration is set to what was given to New(). In this case
-	// it's one epoch.
-	p.forkchoiceAtt.Set(string(r[:]), att, cache.DefaultExpiration)
+	p.forkchoiceAttLock.Lock()
+	defer p.forkchoiceAttLock.Unlock()
+	p.forkchoiceAtt[r] = stateTrie.CopyAttestation(att) // Copied.
 
 	return nil
 }
@@ -34,15 +36,12 @@ func (p *AttCaches) SaveForkchoiceAttestations(atts []*ethpb.Attestation) error 
 
 // ForkchoiceAttestations returns the forkchoice attestations in cache.
 func (p *AttCaches) ForkchoiceAttestations() []*ethpb.Attestation {
-	atts := make([]*ethpb.Attestation, 0, p.forkchoiceAtt.ItemCount())
-	for s, i := range p.forkchoiceAtt.Items() {
-		// Type assertion for the worst case. This shouldn't happen.
-		att, ok := i.Object.(*ethpb.Attestation)
-		if !ok {
-			p.forkchoiceAtt.Delete(s)
-			continue
-		}
-		atts = append(atts, att)
+	atts := make([]*ethpb.Attestation, 0)
+
+	p.forkchoiceAttLock.RLock()
+	defer p.forkchoiceAttLock.RUnlock()
+	for _, att := range p.forkchoiceAtt {
+		atts = append(atts, stateTrie.CopyAttestation(att) /* Copied */)
 	}
 
 	return atts
@@ -50,12 +49,17 @@ func (p *AttCaches) ForkchoiceAttestations() []*ethpb.Attestation {
 
 // DeleteForkchoiceAttestation deletes a forkchoice attestation in cache.
 func (p *AttCaches) DeleteForkchoiceAttestation(att *ethpb.Attestation) error {
-	r, err := ssz.HashTreeRoot(att)
+	if att == nil {
+		return nil
+	}
+	r, err := hashFn(att)
 	if err != nil {
 		return errors.Wrap(err, "could not tree hash attestation")
 	}
 
-	p.forkchoiceAtt.Delete(string(r[:]))
+	p.forkchoiceAttLock.Lock()
+	defer p.forkchoiceAttLock.Unlock()
+	delete(p.forkchoiceAtt, r)
 
 	return nil
 }

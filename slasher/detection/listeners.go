@@ -10,6 +10,7 @@ import (
 	"context"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/shared/blockutil"
 	"go.opencensus.io/trace"
 )
 
@@ -24,9 +25,18 @@ func (ds *Service) detectIncomingBlocks(ctx context.Context, ch chan *ethpb.Sign
 	defer sub.Unsubscribe()
 	for {
 		select {
-		case <-ch:
-			log.Debug("Running detection on block...")
-			// TODO(#4836): Run detection function for proposer slashings.
+		case signedBlock := <-ch:
+			signedBlkHdr, err := blockutil.SignedBeaconBlockHeaderFromBlock(signedBlock)
+			if err != nil {
+				log.WithError(err).Error("Could not get block header from block")
+				continue
+			}
+			slashing, err := ds.proposalsDetector.DetectDoublePropose(ctx, signedBlkHdr)
+			if err != nil {
+				log.WithError(err).Error("Could not perform detection on block header")
+				continue
+			}
+			ds.submitProposerSlashing(ctx, slashing)
 		case <-sub.Err():
 			log.Error("Subscriber closed, exiting goroutine")
 			return
@@ -49,11 +59,15 @@ func (ds *Service) detectIncomingAttestations(ctx context.Context, ch chan *ethp
 	for {
 		select {
 		case indexedAtt := <-ch:
-			log.Debug("Running detection on attestation...")
-			slashings, err := ds.detectAttesterSlashings(ctx, indexedAtt)
+			slashings, err := ds.DetectAttesterSlashings(ctx, indexedAtt)
 			if err != nil {
 				log.WithError(err).Error("Could not detect attester slashings")
 				continue
+			}
+			if len(slashings) < 1 {
+				if err := ds.minMaxSpanDetector.UpdateSpans(ctx, indexedAtt); err != nil {
+					log.WithError(err).Error("Could not update spans")
+				}
 			}
 			ds.submitAttesterSlashings(ctx, slashings)
 		case <-sub.Err():

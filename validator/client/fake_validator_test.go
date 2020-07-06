@@ -3,8 +3,6 @@ package client
 import (
 	"context"
 	"time"
-
-	pb "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
 )
 
 var _ = Validator(&fakeValidator{})
@@ -14,22 +12,25 @@ type fakeValidator struct {
 	WaitForActivationCalled          bool
 	WaitForChainStartCalled          bool
 	WaitForSyncCalled                bool
-	NextSlotRet                      <-chan uint64
+	WaitForSyncedCalled              bool
 	NextSlotCalled                   bool
 	CanonicalHeadSlotCalled          bool
 	UpdateDutiesCalled               bool
-	UpdateDutiesArg1                 uint64
-	UpdateDutiesRet                  error
+	UpdateProtectionsCalled          bool
 	RoleAtCalled                     bool
-	RoleAtArg1                       uint64
-	RolesAtRet                       []pb.ValidatorRole
 	AttestToBlockHeadCalled          bool
-	AttestToBlockHeadArg1            uint64
 	ProposeBlockCalled               bool
-	ProposeBlockArg1                 uint64
 	LogValidatorGainsAndLossesCalled bool
+	SaveProtectionsCalled            bool
 	SlotDeadlineCalled               bool
+	ProposeBlockArg1                 uint64
+	AttestToBlockHeadArg1            uint64
+	RoleAtArg1                       uint64
+	UpdateDutiesArg1                 uint64
+	NextSlotRet                      <-chan uint64
 	PublicKey                        string
+	UpdateDutiesRet                  error
+	RolesAtRet                       []validatorRole
 }
 
 func (fv *fakeValidator) Done() {
@@ -48,6 +49,11 @@ func (fv *fakeValidator) WaitForActivation(_ context.Context) error {
 
 func (fv *fakeValidator) WaitForSync(_ context.Context) error {
 	fv.WaitForSyncCalled = true
+	return nil
+}
+
+func (fv *fakeValidator) WaitForSynced(_ context.Context) error {
+	fv.WaitForSyncedCalled = true
 	return nil
 }
 
@@ -72,15 +78,25 @@ func (fv *fakeValidator) UpdateDuties(_ context.Context, slot uint64) error {
 	return fv.UpdateDutiesRet
 }
 
+func (fv *fakeValidator) UpdateProtections(_ context.Context, slot uint64) error {
+	fv.UpdateProtectionsCalled = true
+	return nil
+}
+
 func (fv *fakeValidator) LogValidatorGainsAndLosses(_ context.Context, slot uint64) error {
 	fv.LogValidatorGainsAndLossesCalled = true
 	return nil
 }
 
-func (fv *fakeValidator) RolesAt(_ context.Context, slot uint64) (map[[48]byte][]pb.ValidatorRole, error) {
+func (fv *fakeValidator) SaveProtections(_ context.Context) error {
+	fv.SaveProtectionsCalled = true
+	return nil
+}
+
+func (fv *fakeValidator) RolesAt(_ context.Context, slot uint64) (map[[48]byte][]validatorRole, error) {
 	fv.RoleAtCalled = true
 	fv.RoleAtArg1 = slot
-	vr := make(map[[48]byte][]pb.ValidatorRole)
+	vr := make(map[[48]byte][]validatorRole)
 	vr[[48]byte{1}] = fv.RolesAtRet
 	return vr, nil
 }

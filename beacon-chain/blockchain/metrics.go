@@ -1,13 +1,17 @@
 package blockchain
 
 import (
+	"time"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/epoch/precompute"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/roughtime"
 )
 
 var (
@@ -19,10 +23,11 @@ var (
 		Name: "beacon_head_slot",
 		Help: "Slot of the head block of the beacon chain",
 	})
-	competingBlks = promauto.NewCounter(prometheus.CounterOpts{
-		Name: "competing_blocks",
-		Help: "The # of blocks received and processed from a competing chain",
+	clockTimeSlot = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "beacon_clock_time_slot",
+		Help: "The current slot based on the genesis time and current clock",
 	})
+
 	headFinalizedEpoch = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "head_finalized_epoch",
 		Help: "Last finalized epoch of the head state",
@@ -73,17 +78,36 @@ var (
 	})
 	totalEligibleBalances = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "total_eligible_balances",
-		Help: "The total amount of ether, in gwei, that has been used in voting attestation target of previous epoch",
+		Help: "The total amount of ether, in gwei, that is eligible for voting of previous epoch",
 	})
 	totalVotedTargetBalances = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "total_voted_target_balances",
-		Help: "The total amount of ether, in gwei, that is eligible for voting of previous epoch",
+		Help: "The total amount of ether, in gwei, that has been used in voting attestation target of previous epoch",
 	})
+	reorgCount = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "beacon_reorg_total",
+		Help: "Count the number of times beacon chain has a reorg",
+	})
+	sentBlockPropagationHistogram = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "block_sent_latency_milliseconds",
+			Help:    "Captures blocks broadcast time. Blocks sent in milliseconds distribution",
+			Buckets: []float64{1000, 2000, 3000, 4000, 5000, 6000},
+		},
+	)
+	attestationInclusionDelay = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "attestation_inclusion_delay_slots",
+			Help:    "The number of slots between att.Slot and block.Slot",
+			Buckets: []float64{1, 2, 3, 4, 6, 32, 64},
+		},
+	)
 )
 
 // reportSlotMetrics reports slot related metrics.
-func reportSlotMetrics(currentSlot uint64, headSlot uint64, finalizedCheckpoint *ethpb.Checkpoint) {
-	beaconSlot.Set(float64(currentSlot))
+func reportSlotMetrics(stateSlot uint64, headSlot uint64, clockSlot uint64, finalizedCheckpoint *ethpb.Checkpoint) {
+	clockTimeSlot.Set(float64(clockSlot))
+	beaconSlot.Set(float64(stateSlot))
 	beaconHeadSlot.Set(float64(headSlot))
 	if finalizedCheckpoint != nil {
 		headFinalizedEpoch.Set(float64(finalizedCheckpoint.Epoch))
@@ -114,6 +138,7 @@ func reportEpochMetrics(state *stateTrie.BeaconState) {
 	for i, validator := range state.Validators() {
 		bal, err := state.BalanceAtIndex(uint64(i))
 		if err != nil {
+			log.Errorf("Could not load validator balance: %v", err)
 			continue
 		}
 		if validator.Slashed {
@@ -174,7 +199,25 @@ func reportEpochMetrics(state *stateTrie.BeaconState) {
 	currentEth1DataDepositCount.Set(float64(state.Eth1Data().DepositCount))
 
 	if precompute.Balances != nil {
-		totalEligibleBalances.Set(float64(precompute.Balances.PrevEpoch))
-		totalVotedTargetBalances.Set(float64(precompute.Balances.PrevEpochTargetAttesters))
+		totalEligibleBalances.Set(float64(precompute.Balances.ActivePrevEpoch))
+		totalVotedTargetBalances.Set(float64(precompute.Balances.PrevEpochTargetAttested))
+	}
+}
+
+// This captures metrics for block sent time by subtracts slot start time.
+func captureSentTimeMetric(genesisTime uint64, currentSlot uint64) error {
+	startTime, err := helpers.SlotToTime(genesisTime, currentSlot)
+	if err != nil {
+		return err
+	}
+	diffMs := roughtime.Now().Sub(startTime) / time.Millisecond
+	sentBlockPropagationHistogram.Observe(float64(diffMs))
+
+	return nil
+}
+
+func reportAttestationInclusion(blk *ethpb.BeaconBlock) {
+	for _, att := range blk.Body.Attestations {
+		attestationInclusionDelay.Observe(float64(blk.Slot - att.Data.Slot))
 	}
 }

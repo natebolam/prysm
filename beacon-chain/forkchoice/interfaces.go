@@ -22,7 +22,7 @@ type HeadRetriever interface {
 
 // BlockProcessor processes the block that's used for accounting fork choice.
 type BlockProcessor interface {
-	ProcessBlock(context.Context, uint64, [32]byte, [32]byte, uint64, uint64) error
+	ProcessBlock(context.Context, uint64, [32]byte, [32]byte, [32]byte, uint64, uint64) error
 }
 
 // AttestationProcessor processes the attestation that's used for accounting fork choice.
@@ -40,4 +40,5 @@ type Getter interface {
 	Nodes() []*protoarray.Node
 	Node([32]byte) *protoarray.Node
 	HasNode([32]byte) bool
+	Store() *protoarray.Store
 }

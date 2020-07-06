@@ -9,6 +9,8 @@ import (
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"github.com/prysmaticlabs/prysm/shared/hashutil"
+	"github.com/prysmaticlabs/prysm/shared/htrutils"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
@@ -20,6 +22,41 @@ func EpochAttestationsRoot(atts []*pb.PendingAttestation) ([32]byte, error) {
 		return cachedHasher.epochAttestationsRoot(atts)
 	}
 	return nocachedHasher.epochAttestationsRoot(atts)
+}
+
+// PendingAttestationRoot describes a method from which the hash tree root
+// of a pending attestation is returned.
+func PendingAttestationRoot(hasher htrutils.HashFn, att *pb.PendingAttestation) ([32]byte, error) {
+	fieldRoots := [][32]byte{}
+	if att != nil {
+		// Bitfield.
+		aggregationRoot, err := htrutils.BitlistRoot(hasher, att.AggregationBits, params.BeaconConfig().MaxValidatorsPerCommittee)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		// Attestation data.
+		attDataRoot, err := attestationDataRoot(hasher, att.Data)
+		if err != nil {
+			return [32]byte{}, err
+		}
+		inclusionBuf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(inclusionBuf, att.InclusionDelay)
+		// Inclusion delay.
+		inclusionRoot := bytesutil.ToBytes32(inclusionBuf)
+
+		proposerBuf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(proposerBuf, att.ProposerIndex)
+		// Proposer index.
+		proposerRoot := bytesutil.ToBytes32(proposerBuf)
+
+		fieldRoots = [][32]byte{aggregationRoot, attDataRoot, inclusionRoot, proposerRoot}
+	}
+	return htrutils.BitwiseMerkleizeArrays(hasher, fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
+}
+
+// AttestationDataRoot describes a method that serves as a HashTreeRoot function for attestation data.
+func AttestationDataRoot(data *ethpb.AttestationData) ([32]byte, error) {
+	return attestationDataRoot(hashutil.CustomSHA256Hasher(), data)
 }
 
 func marshalAttestationData(data *ethpb.AttestationData) []byte {
@@ -58,7 +95,67 @@ func marshalAttestationData(data *ethpb.AttestationData) []byte {
 	return enc
 }
 
-func attestationDataRoot(data *ethpb.AttestationData) ([32]byte, error) {
+func attestationRoot(hasher htrutils.HashFn, att *ethpb.Attestation) ([32]byte, error) {
+	fieldRoots := make([][32]byte, 3)
+
+	// Bitfield.
+	aggregationRoot, err := htrutils.BitlistRoot(hasher, att.AggregationBits, params.BeaconConfig().MaxValidatorsPerCommittee)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	fieldRoots[0] = aggregationRoot
+
+	dataRoot, err := attestationDataRoot(hasher, att.Data)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	fieldRoots[1] = dataRoot
+
+	signatureBuf := bytesutil.ToBytes96(att.Signature)
+	packedSig, err := htrutils.Pack([][]byte{signatureBuf[:]})
+	if err != nil {
+		return [32]byte{}, err
+	}
+	sigRoot, err := htrutils.BitwiseMerkleize(hasher, packedSig, uint64(len(packedSig)), uint64(len(packedSig)))
+	if err != nil {
+		return [32]byte{}, err
+	}
+	fieldRoots[2] = sigRoot
+	return htrutils.BitwiseMerkleizeArrays(hasher, fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
+}
+
+func blockAttestationRoot(atts []*ethpb.Attestation) ([32]byte, error) {
+	hasher := hashutil.CustomSHA256Hasher()
+	roots := make([][]byte, len(atts))
+	for i := 0; i < len(atts); i++ {
+		pendingRoot, err := attestationRoot(hasher, atts[i])
+		if err != nil {
+			return [32]byte{}, errors.Wrap(err, "could not attestation merkleization")
+		}
+		roots[i] = pendingRoot[:]
+	}
+
+	attsRootsRoot, err := htrutils.BitwiseMerkleize(
+		hasher,
+		roots,
+		uint64(len(roots)),
+		params.BeaconConfig().MaxAttestations,
+	)
+	if err != nil {
+		return [32]byte{}, errors.Wrap(err, "could not compute block attestations merkleization")
+	}
+	attsLenBuf := new(bytes.Buffer)
+	if err := binary.Write(attsLenBuf, binary.LittleEndian, uint64(len(atts))); err != nil {
+		return [32]byte{}, errors.Wrap(err, "could not marshal epoch attestations length")
+	}
+	// We need to mix in the length of the slice.
+	attsLenRoot := make([]byte, 32)
+	copy(attsLenRoot, attsLenBuf.Bytes())
+	res := htrutils.MixInLength(attsRootsRoot, attsLenRoot)
+	return res, nil
+}
+
+func attestationDataRoot(hasher htrutils.HashFn, data *ethpb.AttestationData) ([32]byte, error) {
 	fieldRoots := make([][]byte, 5)
 
 	if data != nil {
@@ -79,24 +176,24 @@ func attestationDataRoot(data *ethpb.AttestationData) ([32]byte, error) {
 		fieldRoots[2] = blockRoot[:]
 
 		// Source
-		sourceRoot, err := CheckpointRoot(data.Source)
+		sourceRoot, err := htrutils.CheckpointRoot(hasher, data.Source)
 		if err != nil {
 			return [32]byte{}, errors.Wrap(err, "could not compute source checkpoint merkleization")
 		}
 		fieldRoots[3] = sourceRoot[:]
 
 		// Target
-		targetRoot, err := CheckpointRoot(data.Target)
+		targetRoot, err := htrutils.CheckpointRoot(hasher, data.Target)
 		if err != nil {
 			return [32]byte{}, errors.Wrap(err, "could not compute target checkpoint merkleization")
 		}
 		fieldRoots[4] = targetRoot[:]
 	}
 
-	return bitwiseMerkleize(fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
+	return htrutils.BitwiseMerkleize(hasher, fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
 }
 
-func (h *stateRootHasher) pendingAttestationRoot(att *pb.PendingAttestation) ([32]byte, error) {
+func (h *stateRootHasher) pendingAttestationRoot(hasher htrutils.HashFn, att *pb.PendingAttestation) ([32]byte, error) {
 	// Marshal attestation to determine if it exists in the cache.
 	enc := make([]byte, 2192)
 	fieldRoots := make([][]byte, 4)
@@ -123,14 +220,14 @@ func (h *stateRootHasher) pendingAttestationRoot(att *pb.PendingAttestation) ([3
 		}
 
 		// Bitfield.
-		aggregationRoot, err := bitlistRoot(att.AggregationBits, 2048)
+		aggregationRoot, err := htrutils.BitlistRoot(hasher, att.AggregationBits, 2048)
 		if err != nil {
 			return [32]byte{}, err
 		}
 		fieldRoots[0] = aggregationRoot[:]
 
 		// Attestation data.
-		attDataRoot, err := attestationDataRoot(att.Data)
+		attDataRoot, err := attestationDataRoot(hasher, att.Data)
 		if err != nil {
 			return [32]byte{}, err
 		}
@@ -144,7 +241,7 @@ func (h *stateRootHasher) pendingAttestationRoot(att *pb.PendingAttestation) ([3
 		proposerRoot := bytesutil.ToBytes32(proposerBuf)
 		fieldRoots[3] = proposerRoot[:]
 	}
-	res, err := bitwiseMerkleize(fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
+	res, err := htrutils.BitwiseMerkleize(hasher, fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
 	if err != nil {
 		return [32]byte{}, err
 	}
@@ -155,16 +252,18 @@ func (h *stateRootHasher) pendingAttestationRoot(att *pb.PendingAttestation) ([3
 }
 
 func (h *stateRootHasher) epochAttestationsRoot(atts []*pb.PendingAttestation) ([32]byte, error) {
+	hasher := hashutil.CustomSHA256Hasher()
 	roots := make([][]byte, len(atts))
 	for i := 0; i < len(atts); i++ {
-		pendingRoot, err := h.pendingAttestationRoot(atts[i])
+		pendingRoot, err := h.pendingAttestationRoot(hasher, atts[i])
 		if err != nil {
 			return [32]byte{}, errors.Wrap(err, "could not attestation merkleization")
 		}
 		roots[i] = pendingRoot[:]
 	}
 
-	attsRootsRoot, err := bitwiseMerkleize(
+	attsRootsRoot, err := htrutils.BitwiseMerkleize(
+		hasher,
 		roots,
 		uint64(len(roots)),
 		params.BeaconConfig().MaxAttestations*params.BeaconConfig().SlotsPerEpoch,
@@ -179,6 +278,6 @@ func (h *stateRootHasher) epochAttestationsRoot(atts []*pb.PendingAttestation) (
 	// We need to mix in the length of the slice.
 	attsLenRoot := make([]byte, 32)
 	copy(attsLenRoot, attsLenBuf.Bytes())
-	res := mixInLength(attsRootsRoot, attsLenRoot)
+	res := htrutils.MixInLength(attsRootsRoot, attsLenRoot)
 	return res, nil
 }

@@ -9,8 +9,7 @@ import (
 	"testing"
 
 	"github.com/prysmaticlabs/prysm/shared/testutil"
-	"github.com/prysmaticlabs/prysm/slasher/flags"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 func setupDB(t testing.TB, ctx *cli.Context) *Store {
@@ -22,15 +21,23 @@ func setupDB(t testing.TB, ctx *cli.Context) *Store {
 	if err := os.RemoveAll(p); err != nil {
 		t.Fatalf("Failed to remove directory: %v", err)
 	}
-	cfg := &Config{CacheItems: 0, MaxCacheSize: 0, SpanCacheEnabled: ctx.GlobalBool(flags.UseSpanCacheFlag.Name)}
+	cfg := &Config{}
 	db, err := NewKVStore(p, cfg)
 	if err != nil {
 		t.Fatalf("Failed to instantiate DB: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Failed to close database: %v", err)
+		}
+		if err := os.RemoveAll(db.DatabasePath()); err != nil {
+			t.Fatalf("Failed to remove directory: %v", err)
+		}
+	})
 	return db
 }
 
-func setupDBDiffCacheSize(t testing.TB, cacheItems int64, maxCacheSize int64) *Store {
+func setupDBDiffCacheSize(t testing.TB, cacheSize int) *Store {
 	randPath, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	if err != nil {
 		t.Fatalf("Could not generate random file path: %v", err)
@@ -39,19 +46,18 @@ func setupDBDiffCacheSize(t testing.TB, cacheItems int64, maxCacheSize int64) *S
 	if err := os.RemoveAll(p); err != nil {
 		t.Fatalf("Failed to remove directory: %v", err)
 	}
-	cfg := &Config{CacheItems: cacheItems, MaxCacheSize: maxCacheSize, SpanCacheEnabled: true}
-	newDB, err := NewKVStore(p, cfg)
+	cfg := &Config{SpanCacheSize: cacheSize}
+	db, err := NewKVStore(p, cfg)
 	if err != nil {
 		t.Fatalf("Failed to instantiate DB: %v", err)
 	}
-	return newDB
-}
-
-func teardownDB(t testing.TB, db *Store) {
-	if err := db.Close(); err != nil {
-		t.Fatalf("Failed to close database: %v", err)
-	}
-	if err := os.RemoveAll(db.DatabasePath()); err != nil {
-		t.Fatalf("Failed to remove directory: %v", err)
-	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Failed to close database: %v", err)
+		}
+		if err := os.RemoveAll(db.DatabasePath()); err != nil {
+			t.Fatalf("Failed to remove directory: %v", err)
+		}
+	})
+	return db
 }

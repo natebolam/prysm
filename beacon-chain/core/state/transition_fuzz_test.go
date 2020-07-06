@@ -10,6 +10,8 @@ import (
 )
 
 func TestFuzzExecuteStateTransition_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	sb := &ethpb.SignedBeaconBlock{}
@@ -26,6 +28,8 @@ func TestFuzzExecuteStateTransition_1000(t *testing.T) {
 }
 
 func TestFuzzExecuteStateTransitionNoVerifyAttSigs_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	sb := &ethpb.SignedBeaconBlock{}
@@ -42,6 +46,8 @@ func TestFuzzExecuteStateTransitionNoVerifyAttSigs_1000(t *testing.T) {
 }
 
 func TestFuzzCalculateStateRoot_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	sb := &ethpb.SignedBeaconBlock{}
@@ -58,6 +64,8 @@ func TestFuzzCalculateStateRoot_1000(t *testing.T) {
 }
 
 func TestFuzzProcessSlot_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	fuzzer := fuzz.NewWithSeed(0)
@@ -72,6 +80,8 @@ func TestFuzzProcessSlot_1000(t *testing.T) {
 }
 
 func TestFuzzProcessSlots_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	slot := uint64(0)
@@ -88,6 +98,8 @@ func TestFuzzProcessSlots_1000(t *testing.T) {
 }
 
 func TestFuzzProcessBlock_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	sb := &ethpb.SignedBeaconBlock{}
@@ -104,6 +116,8 @@ func TestFuzzProcessBlock_1000(t *testing.T) {
 }
 
 func TestFuzzProcessBlockNoVerifyAttSigs_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	sb := &ethpb.SignedBeaconBlock{}
@@ -120,6 +134,8 @@ func TestFuzzProcessBlockNoVerifyAttSigs_1000(t *testing.T) {
 }
 
 func TestFuzzProcessOperations_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	bb := &ethpb.BeaconBlockBody{}
@@ -136,6 +152,8 @@ func TestFuzzProcessOperations_1000(t *testing.T) {
 }
 
 func TestFuzzprocessOperationsNoVerify_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	bb := &ethpb.BeaconBlockBody{}
@@ -144,7 +162,7 @@ func TestFuzzprocessOperationsNoVerify_1000(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		fuzzer.Fuzz(state)
 		fuzzer.Fuzz(bb)
-		s, err := processOperationsNoVerify(ctx, state, bb)
+		s, err := ProcessOperationsNoVerify(ctx, state, bb)
 		if err != nil && s != nil {
 			t.Fatalf("state should be nil on err. found: %v on error: %v for block body: %v", s, err, bb)
 		}
@@ -152,6 +170,8 @@ func TestFuzzprocessOperationsNoVerify_1000(t *testing.T) {
 }
 
 func TestFuzzverifyOperationLengths_10000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	state := &stateTrie.BeaconState{}
 	bb := &ethpb.BeaconBlockBody{}
 	fuzzer := fuzz.NewWithSeed(0)
@@ -159,11 +179,14 @@ func TestFuzzverifyOperationLengths_10000(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		fuzzer.Fuzz(state)
 		fuzzer.Fuzz(bb)
-		verifyOperationLengths(state, bb)
+		err := verifyOperationLengths(state, bb)
+		_ = err
 	}
 }
 
 func TestFuzzCanProcessEpoch_10000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	state := &stateTrie.BeaconState{}
 	fuzzer := fuzz.NewWithSeed(0)
 	fuzzer.NilChance(0.1)
@@ -174,6 +197,8 @@ func TestFuzzCanProcessEpoch_10000(t *testing.T) {
 }
 
 func TestFuzzProcessEpochPrecompute_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	fuzzer := fuzz.NewWithSeed(0)
@@ -188,6 +213,8 @@ func TestFuzzProcessEpochPrecompute_1000(t *testing.T) {
 }
 
 func TestFuzzProcessBlockForStateRoot_1000(t *testing.T) {
+	SkipSlotCache.Disable()
+	defer SkipSlotCache.Enable()
 	ctx := context.Background()
 	state := &stateTrie.BeaconState{}
 	sb := &ethpb.SignedBeaconBlock{}

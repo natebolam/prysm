@@ -5,9 +5,9 @@ import (
 	"context"
 	"math/big"
 	"reflect"
-	"strings"
 	"testing"
 
+	fastssz "github.com/ferranbt/fastssz"
 	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-bitfield"
@@ -22,9 +22,12 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/voluntaryexits"
 	mockPOW "github.com/prysmaticlabs/prysm/beacon-chain/powchain/testing"
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	mockSync "github.com/prysmaticlabs/prysm/beacon-chain/sync/initial-sync/testing"
 	dbpb "github.com/prysmaticlabs/prysm/proto/beacon/db"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	attaggregation "github.com/prysmaticlabs/prysm/shared/aggregation/attestations"
 	"github.com/prysmaticlabs/prysm/shared/attestationutil"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
@@ -34,19 +37,16 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
 )
 
-func init() {
-	// Use minimal config to reduce test setup time.
-	params.OverrideBeaconConfig(params.MinimalSpecConfig())
-}
-
 func TestGetBlock_OK(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, sc := dbutil.SetupDB(t)
 	ctx := context.Background()
 
-	beaconState, privKeys := testutil.DeterministicGenesisState(t, params.BeaconConfig().MinGenesisActiveValidatorCount)
+	testutil.ResetCache()
+	params.SetupTestConfigCleanup(t)
+	params.OverrideBeaconConfig(params.MainnetConfig())
+	beaconState, privKeys := testutil.DeterministicGenesisState(t, 64)
 
-	stateRoot, err := beaconState.HashTreeRoot()
+	stateRoot, err := beaconState.HashTreeRoot(ctx)
 	if err != nil {
 		t.Fatalf("Could not hash genesis state: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestGetBlock_OK(t *testing.T) {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
 
-	parentRoot, err := ssz.HashTreeRoot(genesis.Block)
+	parentRoot, err := stateutil.BlockRoot(genesis.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -79,6 +79,7 @@ func TestGetBlock_OK(t *testing.T) {
 		AttPool:           attestations.NewPool(),
 		SlashingsPool:     slashings.NewPool(),
 		ExitPool:          voluntaryexits.NewPool(),
+		StateGen:          stategen.New(db, sc),
 	}
 
 	randaoReveal, err := testutil.RandaoReveal(beaconState, 0, privKeys)
@@ -93,24 +94,36 @@ func TestGetBlock_OK(t *testing.T) {
 		Graffiti:     graffiti[:],
 	}
 
-	// We include max proposer slashings which is currently 1 in the pool.
-	proposerSlashing, err := testutil.GenerateProposerSlashingForValidator(
-		beaconState,
-		privKeys[0],
-		0, /* validator index */
-	)
-	if err := proposerServer.SlashingsPool.InsertProposerSlashing(beaconState, proposerSlashing); err != nil {
-		t.Fatal(err)
+	proposerSlashings := make([]*ethpb.ProposerSlashing, params.BeaconConfig().MaxProposerSlashings)
+	for i := uint64(0); i < params.BeaconConfig().MaxProposerSlashings; i++ {
+		proposerSlashing, err := testutil.GenerateProposerSlashingForValidator(
+			beaconState,
+			privKeys[i],
+			i, /* validator index */
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proposerSlashings[i] = proposerSlashing
+		if err := proposerServer.SlashingsPool.InsertProposerSlashing(context.Background(), beaconState, proposerSlashing); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	// We include max attester slashings which is currently 1 in the pool.
-	attesterSlashing, err := testutil.GenerateAttesterSlashingForValidator(
-		beaconState,
-		privKeys[1],
-		1, /* validator index */
-	)
-	if err := proposerServer.SlashingsPool.InsertAttesterSlashing(beaconState, attesterSlashing); err != nil {
-		t.Fatal(err)
+	attSlashings := make([]*ethpb.AttesterSlashing, params.BeaconConfig().MaxAttesterSlashings)
+	for i := uint64(0); i < params.BeaconConfig().MaxAttesterSlashings; i++ {
+		attesterSlashing, err := testutil.GenerateAttesterSlashingForValidator(
+			beaconState,
+			privKeys[i+params.BeaconConfig().MaxProposerSlashings],
+			i+params.BeaconConfig().MaxProposerSlashings, /* validator index */
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attSlashings[i] = attesterSlashing
+		if err := proposerServer.SlashingsPool.InsertAttesterSlashing(context.Background(), beaconState, attesterSlashing); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	block, err := proposerServer.GetBlock(ctx, req)
@@ -130,28 +143,29 @@ func TestGetBlock_OK(t *testing.T) {
 	if !bytes.Equal(block.Body.Graffiti, req.Graffiti) {
 		t.Fatal("Expected block to have correct graffiti")
 	}
-	if len(block.Body.ProposerSlashings) != 1 {
-		t.Fatalf("Wanted %d proposer slashings, got %d", 1, len(block.Body.ProposerSlashings))
+	if uint64(len(block.Body.ProposerSlashings)) != params.BeaconConfig().MaxProposerSlashings {
+		t.Fatalf("Wanted %d proposer slashings, got %d", params.BeaconConfig().MaxProposerSlashings, len(block.Body.ProposerSlashings))
 	}
-	if !reflect.DeepEqual(block.Body.ProposerSlashings[0], proposerSlashing) {
-		t.Errorf("Wanted proposer slashing %v, got %v", proposerSlashing, block.Body.ProposerSlashings[0])
+	if !reflect.DeepEqual(block.Body.ProposerSlashings, proposerSlashings) {
+		t.Errorf("Wanted proposer slashing %v, got %v", proposerSlashings, block.Body.ProposerSlashings)
 	}
-	if len(block.Body.AttesterSlashings) != 1 {
-		t.Fatalf("Wanted %d attester slashings, got %d", 1, len(block.Body.AttesterSlashings))
+	if uint64(len(block.Body.AttesterSlashings)) != params.BeaconConfig().MaxAttesterSlashings {
+		t.Fatalf("Wanted %d attester slashings, got %d", params.BeaconConfig().MaxAttesterSlashings, len(block.Body.AttesterSlashings))
 	}
-	if !reflect.DeepEqual(block.Body.AttesterSlashings[0], attesterSlashing) {
-		t.Errorf("Wanted attester slashing %v, got %v", attesterSlashing, block.Body.AttesterSlashings)
+	if !reflect.DeepEqual(block.Body.AttesterSlashings, attSlashings) {
+		t.Errorf("Wanted attester slashing %v, got %v", attSlashings, block.Body.AttesterSlashings)
 	}
 }
 
 func TestGetBlock_AddsUnaggregatedAtts(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, sc := dbutil.SetupDB(t)
 	ctx := context.Background()
 
+	params.SetupTestConfigCleanup(t)
+	params.OverrideBeaconConfig(params.MainnetConfig())
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, params.BeaconConfig().MinGenesisActiveValidatorCount)
 
-	stateRoot, err := beaconState.HashTreeRoot()
+	stateRoot, err := beaconState.HashTreeRoot(ctx)
 	if err != nil {
 		t.Fatalf("Could not hash genesis state: %v", err)
 	}
@@ -161,7 +175,7 @@ func TestGetBlock_AddsUnaggregatedAtts(t *testing.T) {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
 
-	parentRoot, err := ssz.HashTreeRoot(genesis.Block)
+	parentRoot, err := stateutil.BlockRoot(genesis.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -184,6 +198,7 @@ func TestGetBlock_AddsUnaggregatedAtts(t *testing.T) {
 		SlashingsPool:     slashings.NewPool(),
 		AttPool:           attestations.NewPool(),
 		ExitPool:          voluntaryexits.NewPool(),
+		StateGen:          stategen.New(db, sc),
 	}
 
 	// Generate a bunch of random attestations at slot. These would be considered double votes, but
@@ -205,7 +220,7 @@ func TestGetBlock_AddsUnaggregatedAtts(t *testing.T) {
 
 	// Generate some more random attestations with a larger spread so that we can capture at least
 	// one unaggregated attestation.
-	if atts, err := testutil.GenerateAttestations(beaconState, privKeys, 8, 1, true); err != nil {
+	if atts, err := testutil.GenerateAttestations(beaconState, privKeys, 300, 1, true); err != nil {
 		t.Fatal(err)
 	} else {
 		found := false
@@ -251,7 +266,7 @@ func TestGetBlock_AddsUnaggregatedAtts(t *testing.T) {
 	if !bytes.Equal(block.Body.Graffiti, req.Graffiti) {
 		t.Fatal("Expected block to have correct graffiti")
 	}
-	if len(block.Body.Attestations) != int(params.BeaconConfig().MaxAttestations) {
+	if uint64(len(block.Body.Attestations)) != params.BeaconConfig().MaxAttestations {
 		t.Fatalf("Expected a full block of attestations, only received %d", len(block.Body.Attestations))
 	}
 	hasUnaggregatedAtt := false
@@ -267,19 +282,20 @@ func TestGetBlock_AddsUnaggregatedAtts(t *testing.T) {
 }
 
 func TestProposeBlock_OK(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
+	params.SetupTestConfigCleanup(t)
+	params.OverrideBeaconConfig(params.MainnetConfig())
 
-	genesis := b.NewGenesisBlock([]byte{})
+	genesis := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(context.Background(), genesis); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
 
-	numDeposits := params.BeaconConfig().MinGenesisActiveValidatorCount
+	numDeposits := uint64(64)
 	beaconState, _ := testutil.DeterministicGenesisState(t, numDeposits)
 
-	genesisRoot, err := ssz.HashTreeRoot(genesis.Block)
+	genesisRoot, err := stateutil.BlockRoot(genesis.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,13 +313,9 @@ func TestProposeBlock_OK(t *testing.T) {
 		HeadFetcher:       c,
 		BlockNotifier:     c.BlockNotifier(),
 	}
-	req := &ethpb.SignedBeaconBlock{
-		Block: &ethpb.BeaconBlock{
-			Slot:       5,
-			ParentRoot: []byte("parent-hash"),
-			Body:       &ethpb.BeaconBlockBody{},
-		},
-	}
+	req := testutil.NewBeaconBlock()
+	req.Block.Slot = 5
+	req.Block.ParentRoot = bytesutil.PadTo([]byte("parent-hash"), 32)
 	if err := db.SaveBlock(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -313,13 +325,14 @@ func TestProposeBlock_OK(t *testing.T) {
 }
 
 func TestComputeStateRoot_OK(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, sc := dbutil.SetupDB(t)
 	ctx := context.Background()
 
+	params.SetupTestConfigCleanup(t)
+	params.OverrideBeaconConfig(params.MainnetConfig())
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, 100)
 
-	stateRoot, err := beaconState.HashTreeRoot()
+	stateRoot, err := beaconState.HashTreeRoot(ctx)
 	if err != nil {
 		t.Fatalf("Could not hash genesis state: %v", err)
 	}
@@ -329,7 +342,7 @@ func TestComputeStateRoot_OK(t *testing.T) {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
 
-	parentRoot, err := ssz.HashTreeRoot(genesis.Block)
+	parentRoot, err := stateutil.BlockRoot(genesis.Block)
 	if err != nil {
 		t.Fatalf("Could not get signing root %v", err)
 	}
@@ -345,12 +358,14 @@ func TestComputeStateRoot_OK(t *testing.T) {
 		ChainStartFetcher: &mockPOW.POWChain{},
 		Eth1InfoFetcher:   &mockPOW.POWChain{},
 		Eth1BlockFetcher:  &mockPOW.POWChain{},
+		StateGen:          stategen.New(db, sc),
 	}
 
 	req := &ethpb.SignedBeaconBlock{
 		Block: &ethpb.BeaconBlock{
-			ParentRoot: parentRoot[:],
-			Slot:       1,
+			ProposerIndex: 21,
+			ParentRoot:    parentRoot[:],
+			Slot:          1,
 			Body: &ethpb.BeaconBlockBody{
 				RandaoReveal:      nil,
 				ProposerSlashings: nil,
@@ -359,7 +374,9 @@ func TestComputeStateRoot_OK(t *testing.T) {
 			},
 		},
 	}
-	beaconState.SetSlot(beaconState.Slot() + 1)
+	if err := beaconState.SetSlot(beaconState.Slot() + 1); err != nil {
+		t.Fatal(err)
+	}
 	randaoReveal, err := testutil.RandaoReveal(beaconState, 0, privKeys)
 	if err != nil {
 		t.Error(err)
@@ -368,15 +385,20 @@ func TestComputeStateRoot_OK(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	beaconState.SetSlot(beaconState.Slot() - 1)
+	if err := beaconState.SetSlot(beaconState.Slot() - 1); err != nil {
+		t.Fatal(err)
+	}
 	req.Block.Body.RandaoReveal = randaoReveal[:]
-	signingRoot, err := ssz.HashTreeRoot(req.Block)
+	currentEpoch := helpers.CurrentEpoch(beaconState)
+	domain, err := helpers.Domain(beaconState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconProposer, beaconState.GenesisValidatorRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingRoot, err := helpers.ComputeSigningRoot(req.Block, domain)
 	if err != nil {
 		t.Error(err)
 	}
-	currentEpoch := helpers.CurrentEpoch(beaconState)
-	domain := helpers.Domain(beaconState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconProposer)
-	blockSig := privKeys[proposerIdx].Sign(signingRoot[:], domain).Marshal()
+	blockSig := privKeys[proposerIdx].Sign(signingRoot[:]).Marshal()
 	req.Signature = blockSig[:]
 
 	_, err = proposerServer.computeStateRoot(context.Background(), req)
@@ -407,13 +429,14 @@ func TestPendingDeposits_Eth1DataVoteOK(t *testing.T) {
 		BlockHash:    blockHash,
 		DepositCount: 3,
 	}
-	for i := 0; i <= int(params.BeaconConfig().SlotsPerEth1VotingPeriod/2); i++ {
+	period := params.BeaconConfig().EpochsPerEth1VotingPeriod * params.BeaconConfig().SlotsPerEpoch
+	for i := 0; i <= int(period/2); i++ {
 		votes = append(votes, vote)
 	}
 
 	blockHash = make([]byte, 32)
 	copy(blockHash, "0x0")
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			DepositRoot:  make([]byte, 32),
 			BlockHash:    blockHash,
@@ -422,6 +445,9 @@ func TestPendingDeposits_Eth1DataVoteOK(t *testing.T) {
 		Eth1DepositIndex: 2,
 		Eth1DataVotes:    votes,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	blk := &ethpb.BeaconBlock{
 		Body: &ethpb.BeaconBlockBody{Eth1Data: &ethpb.Eth1Data{}},
@@ -495,12 +521,15 @@ func TestPendingDeposits_OutsideEth1FollowWindow(t *testing.T) {
 		},
 	}
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash: []byte("0x0"),
 		},
 		Eth1DepositIndex: 2,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var mockSig [96]byte
 	var mockCreds [32]byte
@@ -631,11 +660,12 @@ func TestPendingDeposits_FollowsCorrectEth1Block(t *testing.T) {
 		BlockHash:    []byte("0x1"),
 		DepositCount: 7,
 	}
-	for i := 0; i <= int(params.BeaconConfig().SlotsPerEth1VotingPeriod/2); i++ {
+	period := params.BeaconConfig().EpochsPerEth1VotingPeriod * params.BeaconConfig().SlotsPerEpoch
+	for i := 0; i <= int(period/2); i++ {
 		votes = append(votes, vote)
 	}
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash:    []byte("0x0"),
 			DepositCount: 5,
@@ -643,6 +673,9 @@ func TestPendingDeposits_FollowsCorrectEth1Block(t *testing.T) {
 		Eth1DepositIndex: 1,
 		Eth1DataVotes:    votes,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	blk := &ethpb.BeaconBlock{
 		Slot: beaconState.Slot(),
 	}
@@ -764,13 +797,16 @@ func TestPendingDeposits_CantReturnBelowStateEth1DepositIndex(t *testing.T) {
 		},
 	}
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash:    []byte("0x0"),
 			DepositCount: 100,
 		},
 		Eth1DepositIndex: 10,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	blk := &ethpb.BeaconBlock{
 		Slot: beaconState.Slot(),
 	}
@@ -871,13 +907,16 @@ func TestPendingDeposits_CantReturnMoreThanMax(t *testing.T) {
 		},
 	}
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash:    []byte("0x0"),
 			DepositCount: 100,
 		},
 		Eth1DepositIndex: 2,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	blk := &ethpb.BeaconBlock{
 		Slot: beaconState.Slot(),
 	}
@@ -955,7 +994,7 @@ func TestPendingDeposits_CantReturnMoreThanMax(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deposits) != int(params.BeaconConfig().MaxDeposits) {
+	if uint64(len(deposits)) != params.BeaconConfig().MaxDeposits {
 		t.Errorf(
 			"Received unexpected number of pending deposits: %d, wanted: %d",
 			len(deposits),
@@ -975,13 +1014,16 @@ func TestPendingDeposits_CantReturnMoreDepositCount(t *testing.T) {
 		},
 	}
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash:    []byte("0x0"),
 			DepositCount: 5,
 		},
 		Eth1DepositIndex: 2,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	blk := &ethpb.BeaconBlock{
 		Slot: beaconState.Slot(),
 	}
@@ -1069,12 +1111,15 @@ func TestPendingDeposits_CantReturnMoreDepositCount(t *testing.T) {
 }
 
 func TestEth1Data_EmptyVotesFetchBlockHashFailure(t *testing.T) {
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash: []byte{'a'},
 		},
 		Eth1DataVotes: []*ethpb.Eth1Data{},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	p := &mockPOW.FaultyMockPOWChain{
 		HashesByHeight: make(map[int][]byte),
 	}
@@ -1085,9 +1130,8 @@ func TestEth1Data_EmptyVotesFetchBlockHashFailure(t *testing.T) {
 		BlockReceiver:     &mock.ChainService{State: beaconState},
 		HeadFetcher:       &mock.ChainService{State: beaconState},
 	}
-	want := "could not fetch ETH1_FOLLOW_DISTANCE ancestor"
-	if _, err := proposerServer.eth1Data(context.Background(), beaconState.Slot()+1); !strings.Contains(err.Error(), want) {
-		t.Errorf("Expected error %v, received %v", want, err)
+	if _, err := proposerServer.eth1Data(context.Background(), beaconState.Slot()+1); err != nil {
+		t.Errorf("A failed request should not have returned an error, got %v", err)
 	}
 }
 
@@ -1159,9 +1203,76 @@ func TestDefaultEth1Data_NoBlockExists(t *testing.T) {
 	}
 }
 
-// TODO(2312): Add more tests for edge cases and better coverage.
 func TestEth1Data(t *testing.T) {
-	slot := uint64(10000)
+	slot := uint64(20000)
+
+	p := &mockPOW.POWChain{
+		BlockNumberByHeight: map[uint64]*big.Int{
+			slot * params.BeaconConfig().SecondsPerSlot: big.NewInt(8196),
+		},
+		HashesByHeight: map[int][]byte{
+			8180: []byte("8180"),
+		},
+		Eth1Data: &ethpb.Eth1Data{
+			DepositCount: 55,
+		},
+	}
+
+	headState := testutil.NewBeaconState()
+	if err := headState.SetEth1Data(&ethpb.Eth1Data{DepositCount: 55}); err != nil {
+		t.Fatal(err)
+	}
+	ps := &Server{
+		ChainStartFetcher: p,
+		Eth1InfoFetcher:   p,
+		Eth1BlockFetcher:  p,
+		DepositFetcher:    depositcache.NewDepositCache(),
+		HeadFetcher:       &mock.ChainService{State: headState},
+	}
+
+	ctx := context.Background()
+	eth1Data, err := ps.eth1Data(ctx, slot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if eth1Data.DepositCount != 55 {
+		t.Error("Expected deposit count to be 55")
+	}
+}
+
+func TestEth1Data_SmallerDepositCount(t *testing.T) {
+	slot := uint64(20000)
+	deps := []*dbpb.DepositContainer{
+		{
+			Index:           0,
+			Eth1BlockHeight: 8,
+			Deposit: &ethpb.Deposit{
+				Data: &ethpb.Deposit_Data{
+					PublicKey:             []byte("a"),
+					Signature:             make([]byte, 96),
+					WithdrawalCredentials: make([]byte, 32),
+				}},
+		},
+		{
+			Index:           1,
+			Eth1BlockHeight: 14,
+			Deposit: &ethpb.Deposit{
+				Data: &ethpb.Deposit_Data{
+					PublicKey:             []byte("b"),
+					Signature:             make([]byte, 96),
+					WithdrawalCredentials: make([]byte, 32),
+				}},
+		},
+	}
+	depositTrie, err := trieutil.NewTrie(int(params.BeaconConfig().DepositContractTreeDepth))
+	if err != nil {
+		t.Fatalf("could not setup deposit trie: %v", err)
+	}
+	depositCache := depositcache.NewDepositCache()
+	for _, dp := range deps {
+		depositCache.InsertDeposit(context.Background(), dp.Deposit, dp.Eth1BlockHeight, dp.Index, depositTrie.Root())
+	}
 
 	p := &mockPOW.POWChain{
 		BlockNumberByHeight: map[uint64]*big.Int{
@@ -1178,7 +1289,8 @@ func TestEth1Data(t *testing.T) {
 		ChainStartFetcher: p,
 		Eth1InfoFetcher:   p,
 		Eth1BlockFetcher:  p,
-		DepositFetcher:    depositcache.NewDepositCache(),
+		HeadFetcher:       &mock.ChainService{ETH1Data: &ethpb.Eth1Data{DepositCount: 10}},
+		DepositFetcher:    depositCache,
 	}
 
 	ctx := context.Background()
@@ -1187,14 +1299,15 @@ func TestEth1Data(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if eth1Data.DepositCount != 55 {
-		t.Error("Expected deposit count to be 55")
+	// Will default to 10 as the current deposit count in the
+	// cache is only 2.
+	if eth1Data.DepositCount != 10 {
+		t.Errorf("Expected deposit count to be 10 but got %d", eth1Data.DepositCount)
 	}
 }
 
 func TestEth1Data_MockEnabled(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	// If a mock eth1 data votes is specified, we use the following for the
 	// eth1data we provide to every proposer based on https://github.com/ethereum/eth2.0-pm/issues/62:
 	//
@@ -1205,10 +1318,8 @@ func TestEth1Data_MockEnabled(t *testing.T) {
 	//   BlockHash = hash(hash(current_epoch + slot_in_voting_period)),
 	// )
 	ctx := context.Background()
-	headState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
-		Eth1DepositIndex: 64,
-	})
-	if err != nil {
+	headState := testutil.NewBeaconState()
+	if err := headState.SetEth1DepositIndex(64); err != nil {
 		t.Fatal(err)
 	}
 	ps := &Server{
@@ -1228,12 +1339,11 @@ func TestEth1Data_MockEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantedSlot := 100 % params.BeaconConfig().SlotsPerEth1VotingPeriod
+	period := params.BeaconConfig().EpochsPerEth1VotingPeriod * params.BeaconConfig().SlotsPerEpoch
+	wantedSlot := 100 % period
 	currentEpoch := helpers.SlotToEpoch(100)
-	enc, err := ssz.Marshal(currentEpoch + wantedSlot)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var enc []byte
+	enc = fastssz.MarshalUint64(enc, currentEpoch+wantedSlot)
 	depRoot := hashutil.Hash(enc)
 	blockHash := hashutil.Hash(depRoot[:])
 	want := &ethpb.Eth1Data{
@@ -1247,19 +1357,26 @@ func TestEth1Data_MockEnabled(t *testing.T) {
 }
 
 func TestFilterAttestation_OK(t *testing.T) {
-	db := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, db)
+	db, _ := dbutil.SetupDB(t)
 	ctx := context.Background()
 
-	genesis := b.NewGenesisBlock([]byte{})
+	params.SetupTestConfigCleanup(t)
+	params.OverrideBeaconConfig(params.MainnetConfig())
+	genesis := testutil.NewBeaconBlock()
 	if err := db.SaveBlock(context.Background(), genesis); err != nil {
 		t.Fatalf("Could not save genesis block: %v", err)
 	}
 
-	numDeposits := params.BeaconConfig().MinGenesisActiveValidatorCount
+	numDeposits := uint64(64)
 	state, privKeys := testutil.DeterministicGenesisState(t, numDeposits)
+	if err := state.SetGenesisValidatorRoot(params.BeaconConfig().ZeroHash[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetSlot(1); err != nil {
+		t.Error(err)
+	}
 
-	genesisRoot, err := ssz.HashTreeRoot(genesis.Block)
+	genesisRoot, err := stateutil.BlockRoot(genesis.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1283,7 +1400,7 @@ func TestFilterAttestation_OK(t *testing.T) {
 			Target:         &ethpb.Checkpoint{}},
 		}
 	}
-	received, err := proposerServer.filterAttestationsForBlockInclusion(context.Background(), 1, atts)
+	received, err := proposerServer.filterAttestationsForBlockInclusion(context.Background(), state, atts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1292,7 +1409,7 @@ func TestFilterAttestation_OK(t *testing.T) {
 	}
 
 	for i := 0; i < len(atts); i++ {
-		aggBits := bitfield.NewBitlist(4)
+		aggBits := bitfield.NewBitlist(2)
 		aggBits.SetBitAt(0, true)
 		atts[i] = &ethpb.Attestation{Data: &ethpb.AttestationData{
 			CommitteeIndex: uint64(i),
@@ -1304,25 +1421,30 @@ func TestFilterAttestation_OK(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		attestingIndices, err := attestationutil.AttestingIndices(atts[i].AggregationBits, committee)
+		attestingIndices := attestationutil.AttestingIndices(atts[i].AggregationBits, committee)
 		if err != nil {
 			t.Error(err)
 		}
-		domain := helpers.Domain(state.Fork(), 0, params.BeaconConfig().DomainBeaconAttester)
-
-		sigs := make([]*bls.Signature, len(attestingIndices))
+		domain, err := helpers.Domain(state.Fork(), 0, params.BeaconConfig().DomainBeaconAttester, params.BeaconConfig().ZeroHash[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		sigs := make([]bls.Signature, len(attestingIndices))
 		zeroSig := [96]byte{}
 		atts[i].Signature = zeroSig[:]
 
 		for i, indice := range attestingIndices {
-			hashTreeRoot, _ := ssz.HashTreeRoot(atts[i].Data)
-			sig := privKeys[indice].Sign(hashTreeRoot[:], domain)
+			hashTreeRoot, err := helpers.ComputeSigningRoot(atts[i].Data, domain)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sig := privKeys[indice].Sign(hashTreeRoot[:])
 			sigs[i] = sig
 		}
 		atts[i].Signature = bls.AggregateSignatures(sigs).Marshal()[:]
 	}
 
-	received, err = proposerServer.filterAttestationsForBlockInclusion(context.Background(), 1, atts)
+	received, err = proposerServer.filterAttestationsForBlockInclusion(context.Background(), state, atts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1336,12 +1458,15 @@ func Benchmark_Eth1Data(b *testing.B) {
 
 	hashesByHeight := make(map[int][]byte)
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1DataVotes: []*ethpb.Eth1Data{},
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash: []byte("stub"),
 		},
 	})
+	if err != nil {
+		b.Fatal(err)
+	}
 	var mockSig [96]byte
 	var mockCreds [32]byte
 	deposits := []*dbpb.DepositContainer{
@@ -1375,10 +1500,13 @@ func Benchmark_Eth1Data(b *testing.B) {
 	for i := 0; i < numOfVotes; i++ {
 		blockhash := []byte{'b', 'l', 'o', 'c', 'k', byte(i)}
 		deposit := []byte{'d', 'e', 'p', 'o', 's', 'i', 't', byte(i)}
-		beaconState.SetEth1DataVotes(append(beaconState.Eth1DataVotes(), &ethpb.Eth1Data{
+		err := beaconState.SetEth1DataVotes(append(beaconState.Eth1DataVotes(), &ethpb.Eth1Data{
 			BlockHash:   blockhash,
 			DepositRoot: deposit,
 		}))
+		if err != nil {
+			b.Fatal(err)
+		}
 		hashesByHeight[i] = blockhash
 	}
 	hashesByHeight[numOfVotes+1] = []byte("stub")
@@ -1426,12 +1554,15 @@ func TestDeposits_ReturnsEmptyList_IfLatestEth1DataEqGenesisEth1Block(t *testing
 		GenesisEth1Block: height,
 	}
 
-	beaconState, _ := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
+	beaconState, err := beaconstate.InitializeFromProto(&pbp2p.BeaconState{
 		Eth1Data: &ethpb.Eth1Data{
 			BlockHash: []byte("0x0"),
 		},
 		Eth1DepositIndex: 2,
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	blk := &ethpb.BeaconBlock{
 		Slot: beaconState.Slot(),
 	}
@@ -1523,7 +1654,7 @@ func TestDeleteAttsInPool_Aggregated(t *testing.T) {
 		AttPool: attestations.NewPool(),
 	}
 
-	sig := bls.RandKey().Sign([]byte("foo"), 0).Marshal()
+	sig := bls.RandKey().Sign([]byte("foo")).Marshal()
 	aggregatedAtts := []*ethpb.Attestation{{AggregationBits: bitfield.Bitlist{0b10101}, Signature: sig}, {AggregationBits: bitfield.Bitlist{0b11010}, Signature: sig}}
 	unaggregatedAtts := []*ethpb.Attestation{{AggregationBits: bitfield.Bitlist{0b1001}, Signature: sig}, {AggregationBits: bitfield.Bitlist{0b0001}, Signature: sig}}
 
@@ -1534,11 +1665,11 @@ func TestDeleteAttsInPool_Aggregated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	aa, err := helpers.AggregateAttestations(aggregatedAtts)
+	aa, err := attaggregation.Aggregate(aggregatedAtts)
 	if err != nil {
 		t.Error(err)
 	}
-	if err := s.deleteAttsInPool(append(aa, unaggregatedAtts...)); err != nil {
+	if err := s.deleteAttsInPool(context.Background(), append(aa, unaggregatedAtts...)); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.AttPool.AggregatedAttestations()) != 0 {

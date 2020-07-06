@@ -20,7 +20,7 @@ var (
 	// maxCheckpointStateSize defines the max number of entries check point to state cache can contain.
 	// Choosing 10 to account for multiple forks, this allows 5 forks per epoch boundary with 2 epochs
 	// window to accept attestation based on latest spec.
-	maxCheckpointStateSize = 10
+	maxCheckpointStateSize = uint64(10)
 
 	// Metrics.
 	checkpointStateMiss = promauto.NewCounter(prometheus.CounterOpts{
@@ -93,7 +93,8 @@ func (c *CheckpointStateCache) StateByCheckpoint(cp *ethpb.Checkpoint) (*stateTr
 		return nil, ErrNotCheckpointState
 	}
 
-	return info.State.Copy(), nil
+	// Copy here is unnecessary since the return will only be used to verify attestation signature.
+	return info.State, nil
 }
 
 // AddCheckpointState adds CheckpointState object to the cache. This method also trims the least

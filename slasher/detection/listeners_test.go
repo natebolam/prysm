@@ -8,6 +8,9 @@ import (
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	testDB "github.com/prysmaticlabs/prysm/slasher/db/testing"
+	"github.com/prysmaticlabs/prysm/slasher/detection/attestations"
+	"github.com/prysmaticlabs/prysm/slasher/detection/proposals"
 	"github.com/sirupsen/logrus"
 	logTest "github.com/sirupsen/logrus/hooks/test"
 )
@@ -33,8 +36,10 @@ func (m *mockNotifier) ClientReadyFeed() *event.Feed {
 
 func TestService_DetectIncomingBlocks(t *testing.T) {
 	hook := logTest.NewGlobal()
+	db := testDB.SetupSlasherDB(t, false)
 	ds := Service{
-		notifier: &mockNotifier{},
+		notifier:          &mockNotifier{},
+		proposalsDetector: proposals.NewProposeDetector(db),
 	}
 	blk := &ethpb.SignedBeaconBlock{
 		Block:     &ethpb.BeaconBlock{Slot: 1},
@@ -50,18 +55,25 @@ func TestService_DetectIncomingBlocks(t *testing.T) {
 	blocksChan <- blk
 	cancel()
 	exitRoutine <- true
-	testutil.AssertLogsContain(t, hook, "Running detection on block")
 	testutil.AssertLogsContain(t, hook, "Context canceled")
 }
 
 func TestService_DetectIncomingAttestations(t *testing.T) {
 	hook := logTest.NewGlobal()
 	ds := Service{
-		notifier: &mockNotifier{},
+		notifier:              &mockNotifier{},
+		minMaxSpanDetector:    &attestations.MockSpanDetector{},
+		attesterSlashingsFeed: new(event.Feed),
 	}
 	att := &ethpb.IndexedAttestation{
 		Data: &ethpb.AttestationData{
 			Slot: 1,
+			Source: &ethpb.Checkpoint{
+				Epoch: 0,
+			},
+			Target: &ethpb.Checkpoint{
+				Epoch: 1,
+			},
 		},
 	}
 	exitRoutine := make(chan bool)
@@ -74,6 +86,5 @@ func TestService_DetectIncomingAttestations(t *testing.T) {
 	attsChan <- att
 	cancel()
 	exitRoutine <- true
-	testutil.AssertLogsContain(t, hook, "Running detection on attestation")
 	testutil.AssertLogsContain(t, hook, "Context canceled")
 }

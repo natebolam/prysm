@@ -13,10 +13,17 @@
   },
   "lostcancel": {
     "exclude_files": {
-      "validator/client/runner.go": "No need to cancel right when goroutines begin"
+      "validator/client/runner.go": "No need to cancel right when goroutines begin",
+      "external/.*": "Third party code"
     }
   },
   "nilness": {
+    "exclude_files": {
+      "external/.*": "Third party code",
+      "rules_go_work-.*": "Third party code"
+    }
+  },
+  "pkgfact": {
     "exclude_files": {
       "external/.*": "Third party code",
       "rules_go_work-.*": "Third party code"
@@ -26,7 +33,7 @@
     "exclude_files": {
       "external/.*": "Third party code"
     }
-  }, 
+  },
   "copylocks": {
     "exclude_files": {
       "external/.*": "Third party code"
@@ -35,12 +42,12 @@
   "composites": {
     "exclude_files": {
       "external/.*": "Third party code"
-    } 
-  }, 
+    }
+  },
   "cgocall": {
     "exclude_files": {
       "external/.*": "Third party code"
-    } 
+    }
   },
   "assign": {
     "exclude_files": {
@@ -50,6 +57,57 @@
   "structtag": {
     "exclude_files": {
       "external/.*": "Third party code"
+    }
+  },
+  "maligned": {
+    "exclude_files": {
+      "external/.*": "Third party code",
+      "rules_go_work-.*": "Third party code",
+      "shared/params/config.go": "This config struct needs to be organized for now",
+      "proto/.*": "Excluding protobuf objects for now"
+    }
+  },
+  "roughtime": {
+    "only_files": {
+      "beacon-chain/.*": "",
+      "shared/.*": "",
+      "validator/.*": ""
+    },
+    "exclude_files": {
+      ".*/.*_test\\.go": "Tests are OK to use time.Now()",
+      "shared/version/version\\.go": "Used for printing build time",
+      "shared/roughtime/roughtime\\.go": "Required to bootstrap roughtime",
+      "beacon-chain/blockchain/testing/*": "Test-only package",
+      "beacon-chain/p2p/sender\\.go": "Libp2p uses time.Now and this file sets a time based deadline in such a way that roughtime cannot be used",
+      "beacon-chain/sync/deadlines\\.go": "Libp2p uses time.Now and this file sets a time based deadline in such a way that roughtime cannot be used",
+      "shared/grpcutils/grpcutils\\.go": "Uses time.Now() for gRPC duration logging"
+    }
+  },
+  "errcheck": {
+    "exclude_files": {
+      "external/.*": "Third party code",
+      "rules_go_work-.*": "Third party code",
+      "shared/mock/.*\\.go": "Mocks are OK",
+      ".*/.*mock\\.go": "Mocks are OK",
+      ".*/testmain\\.go": "Test runner generated code",
+      "proto/.*": "Generated protobuf related code"
+    }
+  },
+  "featureconfig": {
+    "only_files": {
+      ".*_test\\.go": "Only tests"
+    }
+  },
+  "cryptorand": {
+    "only_files": {
+      "beacon-chain/.*": "",
+      "shared/.*": "",
+      "validator/.*": ""
+    },
+    "exclude_files": {
+      ".*/.*_test\\.go": "Tests are OK to use weak crypto",
+      "shared/rand/rand\\.go": "Abstracts CSPRNGs for common use",
+      "shared/aggregation/testing/bitlistutils.go": "Test-only package"
     }
   }
 }

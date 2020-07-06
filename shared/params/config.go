@@ -1,31 +1,35 @@
-// Package params defines important constants that are essential to the
-// Ethereum 2.0 services.
+// Package params defines important constants that are essential to eth2 services.
 package params
 
 import (
 	"time"
 
-	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/mohae/deepcopy"
 )
 
 // BeaconChainConfig contains constant configs for node to participate in beacon chain.
 type BeaconChainConfig struct {
 	// Constants (non-configurable)
+	GenesisSlot              uint64 `yaml:"GENESIS_SLOT"`                // GenesisSlot represents the first canonical slot number of the beacon chain.
+	GenesisEpoch             uint64 `yaml:"GENESIS_EPOCH"`               // GenesisEpoch represents the first canonical epoch number of the beacon chain.
 	FarFutureEpoch           uint64 `yaml:"FAR_FUTURE_EPOCH"`            // FarFutureEpoch represents a epoch extremely far away in the future used as the default penalization slot for validators.
 	BaseRewardsPerEpoch      uint64 `yaml:"BASE_REWARDS_PER_EPOCH"`      // BaseRewardsPerEpoch is used to calculate the per epoch rewards.
-	DepositContractTreeDepth uint64 `yaml:"DEPOSIT_CONTRACT_TREE_DEPTH"` // Depth of the Merkle trie of deposits in the validator deposit contract on the PoW chain.
-	MinGenesisDelay          uint64 `yaml:"MIN_GENESIS_DELAY"`           // Minimum number of seconds to delay starting the ETH2 genesis. Must be at least 1 second.
+	DepositContractTreeDepth uint64 `yaml:"DEPOSIT_CONTRACT_TREE_DEPTH"` // DepositContractTreeDepth depth of the Merkle trie of deposits in the validator deposit contract on the PoW chain.
+	JustificationBitsLength  uint64 `yaml:"JUSTIFICATION_BITS_LENGTH"`   // JustificationBitsLength used
 
 	// Misc constants.
-	TargetCommitteeSize            uint64 `yaml:"TARGET_COMMITTEE_SIZE"`        // TargetCommitteeSize is the number of validators in a committee when the chain is healthy.
-	MaxValidatorsPerCommittee      uint64 `yaml:"MAX_VALIDATORS_PER_COMMITTEE"` // MaxValidatorsPerCommittee defines the upper bound of the size of a committee.
-	MaxCommitteesPerSlot           uint64 // MaxCommitteesPerSlot defines the max amount of committee in a single slot.
+	TargetCommitteeSize            uint64 `yaml:"TARGET_COMMITTEE_SIZE"`              // TargetCommitteeSize is the number of validators in a committee when the chain is healthy.
+	MaxValidatorsPerCommittee      uint64 `yaml:"MAX_VALIDATORS_PER_COMMITTEE"`       // MaxValidatorsPerCommittee defines the upper bound of the size of a committee.
+	MaxCommitteesPerSlot           uint64 `yaml:"MAX_COMMITTEES_PER_SLOT"`            // MaxCommitteesPerSlot defines the max amount of committee in a single slot.
 	MinPerEpochChurnLimit          uint64 `yaml:"MIN_PER_EPOCH_CHURN_LIMIT"`          // MinPerEpochChurnLimit is the minimum amount of churn allotted for validator rotations.
 	ChurnLimitQuotient             uint64 `yaml:"CHURN_LIMIT_QUOTIENT"`               // ChurnLimitQuotient is used to determine the limit of how many validators can rotate per epoch.
 	ShuffleRoundCount              uint64 `yaml:"SHUFFLE_ROUND_COUNT"`                // ShuffleRoundCount is used for retrieving the permuted index.
 	MinGenesisActiveValidatorCount uint64 `yaml:"MIN_GENESIS_ACTIVE_VALIDATOR_COUNT"` // MinGenesisActiveValidatorCount defines how many validator deposits needed to kick off beacon chain.
 	MinGenesisTime                 uint64 `yaml:"MIN_GENESIS_TIME"`                   // MinGenesisTime is the time that needed to pass before kicking off beacon chain.
 	TargetAggregatorsPerCommittee  uint64 // TargetAggregatorsPerCommittee defines the number of aggregators inside one committee.
+	HysteresisQuotient             uint64 `yaml:"HYSTERESIS_QUOTIENT"`            // HysteresisQuotient defines the hysteresis quotient for effective balance calculations.
+	HysteresisDownwardMultiplier   uint64 `yaml:"HYSTERESIS_DOWNWARD_MULTIPLIER"` // HysteresisDownwardMultiplier defines the hysteresis downward multiplier for effective balance calculations.
+	HysteresisUpwardMultiplier     uint64 `yaml:"HYSTERESIS_UPWARD_MULTIPLIER"`   // HysteresisUpwardMultiplier defines the hysteresis upward multiplier for effective balance calculations.
 
 	// Gwei value constants.
 	MinDepositAmount          uint64 `yaml:"MIN_DEPOSIT_AMOUNT"`          // MinDepositAmount is the maximal amount of Gwei a validator can send to the deposit contract at once.
@@ -34,24 +38,24 @@ type BeaconChainConfig struct {
 	EffectiveBalanceIncrement uint64 `yaml:"EFFECTIVE_BALANCE_INCREMENT"` // EffectiveBalanceIncrement is used for converting the high balance into the low balance for validators.
 
 	// Initial value constants.
-	BLSWithdrawalPrefixByte byte     `yaml:"BLS_WITHDRAWAL_PREFIX_BYTE"` // BLSWithdrawalPrefixByte is used for BLS withdrawal and it's the first byte.
+	BLSWithdrawalPrefixByte byte     `yaml:"BLS_WITHDRAWAL_PREFIX"` // BLSWithdrawalPrefixByte is used for BLS withdrawal and it's the first byte.
 	ZeroHash                [32]byte // ZeroHash is used to represent a zeroed out 32 byte array.
 
 	// Time parameters constants.
+	GenesisDelay                     uint64 `yaml:"GENESIS_DELAY"`                       // Minimum number of seconds to delay starting the ETH2 genesis. Must be at least 1 second.
 	MinAttestationInclusionDelay     uint64 `yaml:"MIN_ATTESTATION_INCLUSION_DELAY"`     // MinAttestationInclusionDelay defines how many slots validator has to wait to include attestation for beacon block.
 	SecondsPerSlot                   uint64 `yaml:"SECONDS_PER_SLOT"`                    // SecondsPerSlot is how many seconds are in a single slot.
 	SlotsPerEpoch                    uint64 `yaml:"SLOTS_PER_EPOCH"`                     // SlotsPerEpoch is the number of slots in an epoch.
 	MinSeedLookahead                 uint64 `yaml:"MIN_SEED_LOOKAHEAD"`                  // SeedLookahead is the duration of randao look ahead seed.
 	MaxSeedLookahead                 uint64 `yaml:"MAX_SEED_LOOKAHEAD"`                  // MaxSeedLookahead is the duration a validator has to wait for entry and exit in epoch.
-	SlotsPerEth1VotingPeriod         uint64 `yaml:"SLOTS_PER_ETH1_VOTING_PERIOD"`        // SlotsPerEth1VotingPeriod defines how often the merkle root of deposit receipts get updated in beacon node.
+	EpochsPerEth1VotingPeriod        uint64 `yaml:"EPOCHS_PER_ETH1_VOTING_PERIOD"`       // EpochsPerEth1VotingPeriod defines how often the merkle root of deposit receipts get updated in beacon node on per epoch basis.
 	SlotsPerHistoricalRoot           uint64 `yaml:"SLOTS_PER_HISTORICAL_ROOT"`           // SlotsPerHistoricalRoot defines how often the historical root is saved.
 	MinValidatorWithdrawabilityDelay uint64 `yaml:"MIN_VALIDATOR_WITHDRAWABILITY_DELAY"` // MinValidatorWithdrawabilityDelay is the shortest amount of time a validator has to wait to withdraw.
-	PersistentCommitteePeriod        uint64 `yaml:"PERSISTENT_COMMITTEE_PERIOD"`         // PersistentCommitteePeriod is the minimum amount of epochs a validator must participate before exiting.
+	ShardCommitteePeriod             uint64 `yaml:"SHARD_COMMITTEE_PERIOD"`              // ShardCommitteePeriod is the minimum amount of epochs a validator must participate before exiting.
 	MinEpochsToInactivityPenalty     uint64 `yaml:"MIN_EPOCHS_TO_INACTIVITY_PENALTY"`    // MinEpochsToInactivityPenalty defines the minimum amount of epochs since finality to begin penalizing inactivity.
 	Eth1FollowDistance               uint64 // Eth1FollowDistance is the number of eth1.0 blocks to wait before considering a new deposit for voting. This only applies after the chain as been started.
 	SafeSlotsToUpdateJustified       uint64 // SafeSlotsToUpdateJustified is the minimal slots needed to update justified check point.
-	AttestationPropagationSlotRange  uint64 // AttestationPropagationSlotRange is the maximum number of slots during which an attestation can be propagated.
-
+	SecondsPerETH1Block              uint64 `yaml:"SECONDS_PER_ETH1_BLOCK"` // SecondsPerETH1Block is the approximate time for a single eth1 block to be produced.
 	// State list lengths
 	EpochsPerHistoricalVector uint64 `yaml:"EPOCHS_PER_HISTORICAL_VECTOR"` // EpochsPerHistoricalVector defines max length in epoch to store old historical stats in beacon state.
 	EpochsPerSlashingsVector  uint64 `yaml:"EPOCHS_PER_SLASHINGS_VECTOR"`  // EpochsPerSlashingsVector defines max length in epoch to store old stats to recompute slashing witness.
@@ -73,15 +77,16 @@ type BeaconChainConfig struct {
 	MaxVoluntaryExits    uint64 `yaml:"MAX_VOLUNTARY_EXITS"`    // MaxVoluntaryExits defines the maximum number of validator exits in a block.
 
 	// BLS domain values.
-	DomainBeaconProposer []byte `yaml:"DOMAIN_BEACON_PROPOSER"` // DomainBeaconProposer defines the BLS signature domain for beacon proposal verification.
-	DomainRandao         []byte `yaml:"DOMAIN_RANDAO"`          // DomainRandao defines the BLS signature domain for randao verification.
-	DomainBeaconAttester []byte `yaml:"DOMAIN_ATTESTATION"`     // DomainBeaconAttester defines the BLS signature domain for attestation verification.
-	DomainDeposit        []byte `yaml:"DOMAIN_DEPOSIT"`         // DomainDeposit defines the BLS signature domain for deposit verification.
-	DomainVoluntaryExit  []byte `yaml:"DOMAIN_VOLUNTARY_EXIT"`  // DomainVoluntaryExit defines the BLS signature domain for exit verification.
+	DomainBeaconProposer    [4]byte `yaml:"DOMAIN_BEACON_PROPOSER"`     // DomainBeaconProposer defines the BLS signature domain for beacon proposal verification.
+	DomainRandao            [4]byte `yaml:"DOMAIN_RANDAO"`              // DomainRandao defines the BLS signature domain for randao verification.
+	DomainBeaconAttester    [4]byte `yaml:"DOMAIN_BEACON_ATTESTER"`     // DomainBeaconAttester defines the BLS signature domain for attestation verification.
+	DomainDeposit           [4]byte `yaml:"DOMAIN_DEPOSIT"`             // DomainDeposit defines the BLS signature domain for deposit verification.
+	DomainVoluntaryExit     [4]byte `yaml:"DOMAIN_VOLUNTARY_EXIT"`      // DomainVoluntaryExit defines the BLS signature domain for exit verification.
+	DomainSelectionProof    [4]byte `yaml:"DOMAIN_SELECTION_PROOF"`     // DomainSelectionProof defines the BLS signature domain for selection proof.
+	DomainAggregateAndProof [4]byte `yaml:"DOMAIN_AGGREGATE_AND_PROOF"` // DomainAggregateAndProof defines the BLS signature domain for aggregate and proof.
 
 	// Prysm constants.
 	GweiPerEth                uint64        // GweiPerEth is the amount of gwei corresponding to 1 eth.
-	LogBlockDelay             int64         // Number of blocks to wait from the current head before processing logs from the deposit contract.
 	BLSSecretKeyLength        int           // BLSSecretKeyLength defines the expected length of BLS secret keys in bytes.
 	BLSPubkeyLength           int           // BLSPubkeyLength defines the expected length of BLS public keys in bytes.
 	BLSSignatureLength        int           // BLSSignatureLength defines the expected length of BLS signatures in bytes.
@@ -89,222 +94,29 @@ type BeaconChainConfig struct {
 	ValidatorPrivkeyFileName  string        // ValidatorPrivKeyFileName specifies the string name of a validator private key file.
 	WithdrawalPrivkeyFileName string        // WithdrawalPrivKeyFileName specifies the string name of a withdrawal private key file.
 	RPCSyncCheck              time.Duration // Number of seconds to query the sync service, to find out if the node is synced or not.
-	GoerliBlockTime           uint64        // GoerliBlockTime is the number of seconds on avg a Goerli block is created.
-	GenesisForkVersion        []byte        `yaml:"GENESIS_FORK_VERSION"` // GenesisForkVersion is used to track fork version between state transitions.
 	EmptySignature            [96]byte      // EmptySignature is used to represent a zeroed out BLS Signature.
 	DefaultPageSize           int           // DefaultPageSize defines the default page size for RPC server request.
 	MaxPeersToSync            int           // MaxPeersToSync describes the limit for number of peers in round robin sync.
+	SlotsPerArchivedPoint     uint64        // SlotsPerArchivedPoint defines the number of slots per one archived point.
+	GenesisCountdownInterval  time.Duration // How often to log the countdown until the genesis time is reached.
 
 	// Slasher constants.
 	WeakSubjectivityPeriod    uint64 // WeakSubjectivityPeriod defines the time period expressed in number of epochs were proof of stake network should validate block headers and attestations for slashable events.
 	PruneSlasherStoragePeriod uint64 // PruneSlasherStoragePeriod defines the time period expressed in number of epochs were proof of stake network should prune attestation and block header store.
+
+	// Fork-related values.
+	GenesisForkVersion  []byte            `yaml:"GENESIS_FORK_VERSION"` // GenesisForkVersion is used to track fork version between state transitions.
+	NextForkVersion     []byte            `yaml:"NEXT_FORK_VERSION"`    // NextForkVersion is used to track the upcoming fork version, if any.
+	NextForkEpoch       uint64            `yaml:"NEXT_FORK_EPOCH"`      // NextForkEpoch is used to track the epoch of the next fork, if any.
+	ForkVersionSchedule map[uint64][]byte // Schedule of fork versions by epoch number.
 }
 
-var defaultBeaconConfig = &BeaconChainConfig{
-	// Constants (Non-configurable)
-	FarFutureEpoch:           1<<64 - 1,
-	BaseRewardsPerEpoch:      4,
-	DepositContractTreeDepth: 32,
-	MinGenesisDelay:          86400, // 1 day
-
-	// Misc constant.
-	TargetCommitteeSize:            128,
-	MaxValidatorsPerCommittee:      2048,
-	MaxCommitteesPerSlot:           64,
-	MinPerEpochChurnLimit:          4,
-	ChurnLimitQuotient:             1 << 16,
-	ShuffleRoundCount:              90,
-	MinGenesisActiveValidatorCount: 16384,
-	MinGenesisTime:                 0, // Zero until a proper time is decided.
-	TargetAggregatorsPerCommittee:  16,
-
-	// Gwei value constants.
-	MinDepositAmount:          1 * 1e9,
-	MaxEffectiveBalance:       32 * 1e9,
-	EjectionBalance:           16 * 1e9,
-	EffectiveBalanceIncrement: 1 * 1e9,
-
-	// Initial value constants.
-	BLSWithdrawalPrefixByte: byte(0),
-	ZeroHash:                [32]byte{},
-
-	// Time parameter constants.
-	MinAttestationInclusionDelay:     1,
-	SecondsPerSlot:                   12,
-	SlotsPerEpoch:                    32,
-	MinSeedLookahead:                 1,
-	MaxSeedLookahead:                 4,
-	SlotsPerEth1VotingPeriod:         1024,
-	SlotsPerHistoricalRoot:           8192,
-	MinValidatorWithdrawabilityDelay: 256,
-	PersistentCommitteePeriod:        2048,
-	MinEpochsToInactivityPenalty:     4,
-	Eth1FollowDistance:               1024,
-	SafeSlotsToUpdateJustified:       8,
-	AttestationPropagationSlotRange:  32,
-
-	// State list length constants.
-	EpochsPerHistoricalVector: 65536,
-	EpochsPerSlashingsVector:  8192,
-	HistoricalRootsLimit:      16777216,
-	ValidatorRegistryLimit:    1099511627776,
-
-	// Reward and penalty quotients constants.
-	BaseRewardFactor:            64,
-	WhistleBlowerRewardQuotient: 512,
-	ProposerRewardQuotient:      8,
-	InactivityPenaltyQuotient:   1 << 25,
-	MinSlashingPenaltyQuotient:  32,
-
-	// Max operations per block constants.
-	MaxProposerSlashings: 16,
-	MaxAttesterSlashings: 1,
-	MaxAttestations:      128,
-	MaxDeposits:          16,
-	MaxVoluntaryExits:    16,
-
-	// BLS domain values.
-	DomainBeaconProposer: bytesutil.Bytes4(0),
-	DomainBeaconAttester: bytesutil.Bytes4(1),
-	DomainRandao:         bytesutil.Bytes4(2),
-	DomainDeposit:        bytesutil.Bytes4(3),
-	DomainVoluntaryExit:  bytesutil.Bytes4(4),
-
-	// Prysm constants.
-	GweiPerEth:                1000000000,
-	LogBlockDelay:             4,
-	BLSSecretKeyLength:        32,
-	BLSPubkeyLength:           48,
-	BLSSignatureLength:        96,
-	DefaultBufferSize:         10000,
-	WithdrawalPrivkeyFileName: "/shardwithdrawalkey",
-	ValidatorPrivkeyFileName:  "/validatorprivatekey",
-	RPCSyncCheck:              1,
-	GoerliBlockTime:           14, // 14 seconds on average for a goerli block to be created.
-	GenesisForkVersion:        []byte{0, 0, 0, 0},
-	EmptySignature:            [96]byte{},
-	DefaultPageSize:           250,
-	MaxPeersToSync:            15,
-
-	// Slasher related values.
-	WeakSubjectivityPeriod:    54000,
-	PruneSlasherStoragePeriod: 10,
-}
-
-var beaconConfig = defaultBeaconConfig
+// Using onyx as the default configuration for now.
+var beaconConfig = OnyxConfig()
 
 // BeaconConfig retrieves beacon chain config.
 func BeaconConfig() *BeaconChainConfig {
 	return beaconConfig
-}
-
-// MainnetConfig returns the default config to
-// be used in the mainnet.
-func MainnetConfig() *BeaconChainConfig {
-	return defaultBeaconConfig
-}
-
-// DemoBeaconConfig retrieves the demo beacon chain config. This is mainnet config with 1/10th of
-// mainnet deposit values.
-func DemoBeaconConfig() *BeaconChainConfig {
-	demoConfig := *MainnetConfig()
-
-	demoConfig.MinDepositAmount /= 10
-	demoConfig.MaxEffectiveBalance /= 10
-	demoConfig.EjectionBalance /= 10
-	demoConfig.EffectiveBalanceIncrement /= 10
-
-	demoConfig.InactivityPenaltyQuotient /= 10
-
-	// Increment this number after a full testnet tear down.
-	demoConfig.GenesisForkVersion = []byte{0, 0, 0, 4}
-
-	return &demoConfig
-}
-
-// MinimalSpecConfig retrieves the minimal config used in spec tests.
-func MinimalSpecConfig() *BeaconChainConfig {
-	minimalConfig := *defaultBeaconConfig
-	// Misc
-	minimalConfig.MaxCommitteesPerSlot = 4
-	minimalConfig.TargetCommitteeSize = 4
-	minimalConfig.MaxValidatorsPerCommittee = 2048
-	minimalConfig.MinPerEpochChurnLimit = 4
-	minimalConfig.ChurnLimitQuotient = 65536
-	minimalConfig.ShuffleRoundCount = 10
-	minimalConfig.MinGenesisActiveValidatorCount = 64
-	minimalConfig.MinGenesisTime = 0
-	minimalConfig.MinGenesisDelay = 300 // 5 minutes
-	minimalConfig.TargetAggregatorsPerCommittee = 3
-
-	// Gwei values
-	minimalConfig.MinDepositAmount = 1e9
-	minimalConfig.MaxEffectiveBalance = 32e9
-	minimalConfig.EjectionBalance = 16e9
-	minimalConfig.EffectiveBalanceIncrement = 1e9
-
-	// Initial values
-	minimalConfig.BLSWithdrawalPrefixByte = byte(0)
-
-	// Time parameters
-	minimalConfig.SecondsPerSlot = 6
-	minimalConfig.MinAttestationInclusionDelay = 1
-	minimalConfig.SlotsPerEpoch = 8
-	minimalConfig.MinSeedLookahead = 1
-	minimalConfig.MaxSeedLookahead = 4
-	minimalConfig.SlotsPerEth1VotingPeriod = 16
-	minimalConfig.SlotsPerHistoricalRoot = 64
-	minimalConfig.MinValidatorWithdrawabilityDelay = 256
-	minimalConfig.PersistentCommitteePeriod = 2048
-	minimalConfig.MinEpochsToInactivityPenalty = 4
-	minimalConfig.Eth1FollowDistance = 16
-	minimalConfig.SafeSlotsToUpdateJustified = 2
-
-	// State vector lengths
-	minimalConfig.EpochsPerHistoricalVector = 64
-	minimalConfig.EpochsPerSlashingsVector = 64
-	minimalConfig.HistoricalRootsLimit = 16777216
-	minimalConfig.ValidatorRegistryLimit = 1099511627776
-
-	// Reward and penalty quotients
-	minimalConfig.BaseRewardFactor = 64
-	minimalConfig.WhistleBlowerRewardQuotient = 512
-	minimalConfig.ProposerRewardQuotient = 8
-	minimalConfig.InactivityPenaltyQuotient = 33554432
-	minimalConfig.MinSlashingPenaltyQuotient = 32
-
-	// Max operations per block
-	minimalConfig.MaxProposerSlashings = 16
-	minimalConfig.MaxAttesterSlashings = 1
-	minimalConfig.MaxAttestations = 128
-	minimalConfig.MaxDeposits = 16
-	minimalConfig.MaxVoluntaryExits = 16
-
-	// Signature domains
-	minimalConfig.DomainBeaconProposer = bytesutil.Bytes4(0)
-	minimalConfig.DomainBeaconAttester = bytesutil.Bytes4(1)
-	minimalConfig.DomainRandao = bytesutil.Bytes4(2)
-	minimalConfig.DomainDeposit = bytesutil.Bytes4(3)
-	minimalConfig.DomainVoluntaryExit = bytesutil.Bytes4(4)
-
-	minimalConfig.DepositContractTreeDepth = 32
-	minimalConfig.FarFutureEpoch = 1<<64 - 1
-	return &minimalConfig
-}
-
-// UseDemoBeaconConfig for beacon chain services.
-func UseDemoBeaconConfig() {
-	beaconConfig = DemoBeaconConfig()
-}
-
-// UseMinimalConfig for beacon chain services.
-func UseMinimalConfig() {
-	beaconConfig = MinimalSpecConfig()
-}
-
-// UseMainnetConfig for beacon chain services.
-func UseMainnetConfig() {
-	beaconConfig = defaultBeaconConfig
 }
 
 // OverrideBeaconConfig by replacing the config. The preferred pattern is to
@@ -313,4 +125,13 @@ func UseMainnetConfig() {
 // return this new configuration.
 func OverrideBeaconConfig(c *BeaconChainConfig) {
 	beaconConfig = c
+}
+
+// Copy returns a copy of the config object.
+func (c *BeaconChainConfig) Copy() *BeaconChainConfig {
+	config, ok := deepcopy.Copy(*c).(BeaconChainConfig)
+	if !ok {
+		config = *beaconConfig
+	}
+	return &config
 }

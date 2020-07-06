@@ -6,15 +6,17 @@ import (
 
 	ptypes "github.com/gogo/protobuf/types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	blockfeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/block"
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db/filters"
-	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/pagination"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -28,9 +30,9 @@ import (
 func (bs *Server) ListBlocks(
 	ctx context.Context, req *ethpb.ListBlocksRequest,
 ) (*ethpb.ListBlocksResponse, error) {
-	if int(req.PageSize) > flags.Get().MaxPageSize {
+	if int(req.PageSize) > cmd.Get().MaxRPCPageSize {
 		return nil, status.Errorf(codes.InvalidArgument, "Requested page size %d can not be greater than max size %d",
-			req.PageSize, flags.Get().MaxPageSize)
+			req.PageSize, cmd.Get().MaxRPCPageSize)
 	}
 
 	switch q := req.QueryFilter.(type) {
@@ -57,7 +59,7 @@ func (bs *Server) ListBlocks(
 		returnedBlks := blks[start:end]
 		containers := make([]*ethpb.BeaconBlockContainer, len(returnedBlks))
 		for i, b := range returnedBlks {
-			root, err := ssz.HashTreeRoot(b.Block)
+			root, err := stateutil.BlockRoot(b.Block)
 			if err != nil {
 				return nil, err
 			}
@@ -84,7 +86,7 @@ func (bs *Server) ListBlocks(
 				NextPageToken:   strconv.Itoa(0),
 			}, nil
 		}
-		root, err := ssz.HashTreeRoot(blk.Block)
+		root, err := stateutil.BlockRoot(blk.Block)
 		if err != nil {
 			return nil, err
 		}
@@ -120,7 +122,7 @@ func (bs *Server) ListBlocks(
 		returnedBlks := blks[start:end]
 		containers := make([]*ethpb.BeaconBlockContainer, len(returnedBlks))
 		for i, b := range returnedBlks {
-			root, err := ssz.HashTreeRoot(b.Block)
+			root, err := stateutil.BlockRoot(b.Block)
 			if err != nil {
 				return nil, err
 			}
@@ -143,7 +145,7 @@ func (bs *Server) ListBlocks(
 		if genBlk == nil {
 			return nil, status.Error(codes.Internal, "Could not find genesis block")
 		}
-		root, err := ssz.HashTreeRoot(genBlk.Block)
+		root, err := stateutil.BlockRoot(genBlk.Block)
 		if err != nil {
 			return nil, err
 		}
@@ -189,6 +191,16 @@ func (bs *Server) StreamBlocks(_ *ptypes.Empty, stream ethpb.BeaconChain_StreamB
 				}
 				if data.SignedBlock == nil {
 					// One nil block shouldn't stop the stream.
+					continue
+				}
+				headState, err := bs.HeadFetcher.HeadState(bs.Ctx)
+				if err != nil {
+					log.WithError(err).WithField("blockSlot", data.SignedBlock.Block.Slot).Warn("Could not get head state to verify block signature")
+					continue
+				}
+
+				if err := blocks.VerifyBlockSignature(headState, data.SignedBlock); err != nil {
+					log.WithError(err).WithField("blockSlot", data.SignedBlock.Block.Slot).Warn("Could not verify block signature")
 					continue
 				}
 				if err := stream.Send(data.SignedBlock); err != nil {
@@ -241,43 +253,63 @@ func (bs *Server) chainHeadRetrieval(ctx context.Context) (*ethpb.ChainHead, err
 	if headBlock == nil {
 		return nil, status.Error(codes.Internal, "Head block of chain was nil")
 	}
-	headBlockRoot, err := ssz.HashTreeRoot(headBlock.Block)
+	headBlockRoot, err := stateutil.BlockRoot(headBlock.Block)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not get head block root: %v", err)
 	}
 
-	finalizedCheckpoint := bs.FinalizationFetcher.FinalizedCheckpt()
-	b, err := bs.BeaconDB.Block(ctx, bytesutil.ToBytes32(finalizedCheckpoint.Root))
-	if err != nil || b == nil || b.Block == nil {
-		return nil, status.Error(codes.Internal, "Could not get finalized block")
+	isGenesis := func(cp *ethpb.Checkpoint) bool {
+		return bytesutil.ToBytes32(cp.Root) == params.BeaconConfig().ZeroHash && cp.Epoch == 0
 	}
-	finalizedSlot := b.Block.Slot
+	// Retrieve genesis block in the event we have genesis checkpoints.
+	genBlock, err := bs.BeaconDB.GenesisBlock(ctx)
+	if err != nil || genBlock == nil || genBlock.Block == nil {
+		return nil, status.Error(codes.Internal, "Could not get genesis block")
+	}
+
+	var b *ethpb.SignedBeaconBlock
+
+	finalizedCheckpoint := bs.FinalizationFetcher.FinalizedCheckpt()
+	if isGenesis(finalizedCheckpoint) {
+		b = genBlock
+	} else {
+		b, err = bs.BeaconDB.Block(ctx, bytesutil.ToBytes32(finalizedCheckpoint.Root))
+		if err != nil || b == nil || b.Block == nil {
+			return nil, status.Error(codes.Internal, "Could not get finalized block")
+		}
+	}
 
 	justifiedCheckpoint := bs.FinalizationFetcher.CurrentJustifiedCheckpt()
-	b, err = bs.BeaconDB.Block(ctx, bytesutil.ToBytes32(justifiedCheckpoint.Root))
-	if err != nil || b == nil || b.Block == nil {
-		return nil, status.Error(codes.Internal, "Could not get justified block")
+	if isGenesis(justifiedCheckpoint) {
+		b = genBlock
+	} else {
+		b, err = bs.BeaconDB.Block(ctx, bytesutil.ToBytes32(justifiedCheckpoint.Root))
+		if err != nil || b == nil || b.Block == nil {
+			return nil, status.Error(codes.Internal, "Could not get justified block")
+		}
 	}
-	justifiedSlot := b.Block.Slot
 
 	prevJustifiedCheckpoint := bs.FinalizationFetcher.PreviousJustifiedCheckpt()
-	b, err = bs.BeaconDB.Block(ctx, bytesutil.ToBytes32(prevJustifiedCheckpoint.Root))
-	if err != nil || b == nil || b.Block == nil {
-		return nil, status.Error(codes.Internal, "Could not get prev justified block")
+	if isGenesis(prevJustifiedCheckpoint) {
+		b = genBlock
+	} else {
+		b, err = bs.BeaconDB.Block(ctx, bytesutil.ToBytes32(prevJustifiedCheckpoint.Root))
+		if err != nil || b == nil || b.Block == nil {
+			return nil, status.Error(codes.Internal, "Could not get prev justified block")
+		}
 	}
-	prevJustifiedSlot := b.Block.Slot
 
 	return &ethpb.ChainHead{
 		HeadSlot:                   headBlock.Block.Slot,
 		HeadEpoch:                  helpers.SlotToEpoch(headBlock.Block.Slot),
 		HeadBlockRoot:              headBlockRoot[:],
-		FinalizedSlot:              finalizedSlot,
+		FinalizedSlot:              helpers.StartSlot(finalizedCheckpoint.Epoch),
 		FinalizedEpoch:             finalizedCheckpoint.Epoch,
 		FinalizedBlockRoot:         finalizedCheckpoint.Root,
-		JustifiedSlot:              justifiedSlot,
+		JustifiedSlot:              helpers.StartSlot(justifiedCheckpoint.Epoch),
 		JustifiedEpoch:             justifiedCheckpoint.Epoch,
 		JustifiedBlockRoot:         justifiedCheckpoint.Root,
-		PreviousJustifiedSlot:      prevJustifiedSlot,
+		PreviousJustifiedSlot:      helpers.StartSlot(prevJustifiedCheckpoint.Epoch),
 		PreviousJustifiedEpoch:     prevJustifiedCheckpoint.Epoch,
 		PreviousJustifiedBlockRoot: prevJustifiedCheckpoint.Root,
 	}, nil

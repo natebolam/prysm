@@ -13,7 +13,6 @@ import (
 	"github.com/gogo/protobuf/proto"
 	jsoniter "github.com/json-iterator/go"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
@@ -56,6 +55,19 @@ func TestFolders(t *testing.T, config string, folderPath string) ([]os.FileInfo,
 	return testFolders, testsFolderPath
 }
 
+// BazelDirectoryNonEmpty returns true if directory exists and is not empty.
+func BazelDirectoryNonEmpty(filePath string) (bool, error) {
+	p, err := bazel.Runfile(filePath)
+	if err != nil {
+		return false, err
+	}
+	fs, err := ioutil.ReadDir(p)
+	if err != nil {
+		return false, err
+	}
+	return len(fs) > 0, nil
+}
+
 // BazelFileBytes returns the byte array of the bazel file path given.
 func BazelFileBytes(filePaths ...string) ([]byte, error) {
 	filepath, err := bazel.Runfile(path.Join(filePaths...))
@@ -82,7 +94,7 @@ func RunBlockOperationTest(
 		t.Fatal(err)
 	}
 	preStateBase := &pb.BeaconState{}
-	if err := ssz.Unmarshal(preBeaconStateFile, preStateBase); err != nil {
+	if err := preStateBase.UnmarshalSSZ(preBeaconStateFile); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
 	preState, err := beaconstate.InitializeFromProto(preStateBase)
@@ -112,12 +124,12 @@ func RunBlockOperationTest(
 		}
 
 		postBeaconState := &pb.BeaconState{}
-		if err := ssz.Unmarshal(postBeaconStateFile, postBeaconState); err != nil {
+		if err := postBeaconState.UnmarshalSSZ(postBeaconStateFile); err != nil {
 			t.Fatalf("Failed to unmarshal: %v", err)
 		}
 
-		if !proto.Equal(beaconState.CloneInnerState(), postBeaconState) {
-			diff, _ := messagediff.PrettyDiff(beaconState, postBeaconState)
+		if !proto.Equal(beaconState.InnerStateUnsafe(), postBeaconState) {
+			diff, _ := messagediff.PrettyDiff(beaconState.InnerStateUnsafe(), postBeaconState)
 			t.Log(diff)
 			t.Fatal("Post state does not match expected")
 		}
@@ -144,7 +156,7 @@ func RunEpochOperationTest(
 		t.Fatal(err)
 	}
 	preBeaconStateBase := &pb.BeaconState{}
-	if err := ssz.Unmarshal(preBeaconStateFile, preBeaconStateBase); err != nil {
+	if err := preBeaconStateBase.UnmarshalSSZ(preBeaconStateFile); err != nil {
 		t.Fatalf("Failed to unmarshal: %v", err)
 	}
 	preBeaconState, err := beaconstate.InitializeFromProto(preBeaconStateBase)
@@ -173,7 +185,7 @@ func RunEpochOperationTest(
 		}
 
 		postBeaconState := &pb.BeaconState{}
-		if err := ssz.Unmarshal(postBeaconStateFile, postBeaconState); err != nil {
+		if err := postBeaconState.UnmarshalSSZ(postBeaconStateFile); err != nil {
 			t.Fatalf("Failed to unmarshal: %v", err)
 		}
 

@@ -30,202 +30,6 @@ var _ = math.Inf
 // proto package needs to be updated.
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
-type SlashingStatusRequest_SlashingStatus int32
-
-const (
-	SlashingStatusRequest_Unknown  SlashingStatusRequest_SlashingStatus = 0
-	SlashingStatusRequest_Active   SlashingStatusRequest_SlashingStatus = 1
-	SlashingStatusRequest_Included SlashingStatusRequest_SlashingStatus = 2
-	SlashingStatusRequest_Reverted SlashingStatusRequest_SlashingStatus = 3
-)
-
-var SlashingStatusRequest_SlashingStatus_name = map[int32]string{
-	0: "Unknown",
-	1: "Active",
-	2: "Included",
-	3: "Reverted",
-}
-
-var SlashingStatusRequest_SlashingStatus_value = map[string]int32{
-	"Unknown":  0,
-	"Active":   1,
-	"Included": 2,
-	"Reverted": 3,
-}
-
-func (x SlashingStatusRequest_SlashingStatus) String() string {
-	return proto.EnumName(SlashingStatusRequest_SlashingStatus_name, int32(x))
-}
-
-func (SlashingStatusRequest_SlashingStatus) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{9, 0}
-}
-
-type CompressedIdxAtt struct {
-	Indices              []uint64 `protobuf:"varint,1,rep,packed,name=indices,proto3" json:"indices,omitempty"`
-	DataRoot             []byte   `protobuf:"bytes,2,opt,name=data_root,json=dataRoot,proto3" json:"data_root,omitempty"`
-	Signature            []byte   `protobuf:"bytes,3,opt,name=signature,proto3" json:"signature,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
-}
-
-func (m *CompressedIdxAtt) Reset()         { *m = CompressedIdxAtt{} }
-func (m *CompressedIdxAtt) String() string { return proto.CompactTextString(m) }
-func (*CompressedIdxAtt) ProtoMessage()    {}
-func (*CompressedIdxAtt) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{0}
-}
-func (m *CompressedIdxAtt) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *CompressedIdxAtt) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_CompressedIdxAtt.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *CompressedIdxAtt) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_CompressedIdxAtt.Merge(m, src)
-}
-func (m *CompressedIdxAtt) XXX_Size() int {
-	return m.Size()
-}
-func (m *CompressedIdxAtt) XXX_DiscardUnknown() {
-	xxx_messageInfo_CompressedIdxAtt.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_CompressedIdxAtt proto.InternalMessageInfo
-
-func (m *CompressedIdxAtt) GetIndices() []uint64 {
-	if m != nil {
-		return m.Indices
-	}
-	return nil
-}
-
-func (m *CompressedIdxAtt) GetDataRoot() []byte {
-	if m != nil {
-		return m.DataRoot
-	}
-	return nil
-}
-
-func (m *CompressedIdxAtt) GetSignature() []byte {
-	if m != nil {
-		return m.Signature
-	}
-	return nil
-}
-
-type CompressedIdxAttList struct {
-	List                 []*CompressedIdxAtt `protobuf:"bytes,1,rep,name=list,proto3" json:"list,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}            `json:"-"`
-	XXX_unrecognized     []byte              `json:"-"`
-	XXX_sizecache        int32               `json:"-"`
-}
-
-func (m *CompressedIdxAttList) Reset()         { *m = CompressedIdxAttList{} }
-func (m *CompressedIdxAttList) String() string { return proto.CompactTextString(m) }
-func (*CompressedIdxAttList) ProtoMessage()    {}
-func (*CompressedIdxAttList) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{1}
-}
-func (m *CompressedIdxAttList) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *CompressedIdxAttList) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_CompressedIdxAttList.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *CompressedIdxAttList) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_CompressedIdxAttList.Merge(m, src)
-}
-func (m *CompressedIdxAttList) XXX_Size() int {
-	return m.Size()
-}
-func (m *CompressedIdxAttList) XXX_DiscardUnknown() {
-	xxx_messageInfo_CompressedIdxAttList.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_CompressedIdxAttList proto.InternalMessageInfo
-
-func (m *CompressedIdxAttList) GetList() []*CompressedIdxAtt {
-	if m != nil {
-		return m.List
-	}
-	return nil
-}
-
-type ProposerSlashingRequest struct {
-	BlockHeader          *v1alpha1.SignedBeaconBlockHeader `protobuf:"bytes,1,opt,name=block_header,json=blockHeader,proto3" json:"block_header,omitempty"`
-	ValidatorIndex       uint64                            `protobuf:"varint,2,opt,name=validator_index,json=validatorIndex,proto3" json:"validator_index,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}                          `json:"-"`
-	XXX_unrecognized     []byte                            `json:"-"`
-	XXX_sizecache        int32                             `json:"-"`
-}
-
-func (m *ProposerSlashingRequest) Reset()         { *m = ProposerSlashingRequest{} }
-func (m *ProposerSlashingRequest) String() string { return proto.CompactTextString(m) }
-func (*ProposerSlashingRequest) ProtoMessage()    {}
-func (*ProposerSlashingRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{2}
-}
-func (m *ProposerSlashingRequest) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *ProposerSlashingRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_ProposerSlashingRequest.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *ProposerSlashingRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_ProposerSlashingRequest.Merge(m, src)
-}
-func (m *ProposerSlashingRequest) XXX_Size() int {
-	return m.Size()
-}
-func (m *ProposerSlashingRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_ProposerSlashingRequest.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_ProposerSlashingRequest proto.InternalMessageInfo
-
-func (m *ProposerSlashingRequest) GetBlockHeader() *v1alpha1.SignedBeaconBlockHeader {
-	if m != nil {
-		return m.BlockHeader
-	}
-	return nil
-}
-
-func (m *ProposerSlashingRequest) GetValidatorIndex() uint64 {
-	if m != nil {
-		return m.ValidatorIndex
-	}
-	return 0
-}
-
 type ProposerSlashingResponse struct {
 	ProposerSlashing     []*v1alpha1.ProposerSlashing `protobuf:"bytes,1,rep,name=proposer_slashing,json=proposerSlashing,proto3" json:"proposer_slashing,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}                     `json:"-"`
@@ -237,7 +41,7 @@ func (m *ProposerSlashingResponse) Reset()         { *m = ProposerSlashingRespon
 func (m *ProposerSlashingResponse) String() string { return proto.CompactTextString(m) }
 func (*ProposerSlashingResponse) ProtoMessage()    {}
 func (*ProposerSlashingResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{3}
+	return fileDescriptor_da7e95107d0081b4, []int{0}
 }
 func (m *ProposerSlashingResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -273,6 +77,53 @@ func (m *ProposerSlashingResponse) GetProposerSlashing() []*v1alpha1.ProposerSla
 	return nil
 }
 
+type Slashable struct {
+	Slashable            bool     `protobuf:"varint,1,opt,name=slashable,proto3" json:"slashable,omitempty"`
+	XXX_NoUnkeyedLiteral struct{} `json:"-"`
+	XXX_unrecognized     []byte   `json:"-"`
+	XXX_sizecache        int32    `json:"-"`
+}
+
+func (m *Slashable) Reset()         { *m = Slashable{} }
+func (m *Slashable) String() string { return proto.CompactTextString(m) }
+func (*Slashable) ProtoMessage()    {}
+func (*Slashable) Descriptor() ([]byte, []int) {
+	return fileDescriptor_da7e95107d0081b4, []int{1}
+}
+func (m *Slashable) XXX_Unmarshal(b []byte) error {
+	return m.Unmarshal(b)
+}
+func (m *Slashable) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
+	if deterministic {
+		return xxx_messageInfo_Slashable.Marshal(b, m, deterministic)
+	} else {
+		b = b[:cap(b)]
+		n, err := m.MarshalToSizedBuffer(b)
+		if err != nil {
+			return nil, err
+		}
+		return b[:n], nil
+	}
+}
+func (m *Slashable) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_Slashable.Merge(m, src)
+}
+func (m *Slashable) XXX_Size() int {
+	return m.Size()
+}
+func (m *Slashable) XXX_DiscardUnknown() {
+	xxx_messageInfo_Slashable.DiscardUnknown(m)
+}
+
+var xxx_messageInfo_Slashable proto.InternalMessageInfo
+
+func (m *Slashable) GetSlashable() bool {
+	if m != nil {
+		return m.Slashable
+	}
+	return false
+}
+
 type AttesterSlashingResponse struct {
 	AttesterSlashing     []*v1alpha1.AttesterSlashing `protobuf:"bytes,1,rep,name=attester_slashing,json=attesterSlashing,proto3" json:"attester_slashing,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}                     `json:"-"`
@@ -284,7 +135,7 @@ func (m *AttesterSlashingResponse) Reset()         { *m = AttesterSlashingRespon
 func (m *AttesterSlashingResponse) String() string { return proto.CompactTextString(m) }
 func (*AttesterSlashingResponse) ProtoMessage()    {}
 func (*AttesterSlashingResponse) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{4}
+	return fileDescriptor_da7e95107d0081b4, []int{2}
 }
 func (m *AttesterSlashingResponse) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -320,108 +171,6 @@ func (m *AttesterSlashingResponse) GetAttesterSlashing() []*v1alpha1.AttesterSla
 	return nil
 }
 
-type MinMaxEpochSpan struct {
-	MinEpochSpan         uint32   `protobuf:"varint,1,opt,name=min_epoch_span,json=minEpochSpan,proto3" json:"min_epoch_span,omitempty"`
-	MaxEpochSpan         uint32   `protobuf:"varint,2,opt,name=max_epoch_span,json=maxEpochSpan,proto3" json:"max_epoch_span,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
-}
-
-func (m *MinMaxEpochSpan) Reset()         { *m = MinMaxEpochSpan{} }
-func (m *MinMaxEpochSpan) String() string { return proto.CompactTextString(m) }
-func (*MinMaxEpochSpan) ProtoMessage()    {}
-func (*MinMaxEpochSpan) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{5}
-}
-func (m *MinMaxEpochSpan) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *MinMaxEpochSpan) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_MinMaxEpochSpan.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *MinMaxEpochSpan) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_MinMaxEpochSpan.Merge(m, src)
-}
-func (m *MinMaxEpochSpan) XXX_Size() int {
-	return m.Size()
-}
-func (m *MinMaxEpochSpan) XXX_DiscardUnknown() {
-	xxx_messageInfo_MinMaxEpochSpan.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_MinMaxEpochSpan proto.InternalMessageInfo
-
-func (m *MinMaxEpochSpan) GetMinEpochSpan() uint32 {
-	if m != nil {
-		return m.MinEpochSpan
-	}
-	return 0
-}
-
-func (m *MinMaxEpochSpan) GetMaxEpochSpan() uint32 {
-	if m != nil {
-		return m.MaxEpochSpan
-	}
-	return 0
-}
-
-type EpochSpanMap struct {
-	EpochSpanMap         map[uint64]*MinMaxEpochSpan `protobuf:"bytes,1,rep,name=epoch_span_map,json=epochSpanMap,proto3" json:"epoch_span_map,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
-	XXX_NoUnkeyedLiteral struct{}                    `json:"-"`
-	XXX_unrecognized     []byte                      `json:"-"`
-	XXX_sizecache        int32                       `json:"-"`
-}
-
-func (m *EpochSpanMap) Reset()         { *m = EpochSpanMap{} }
-func (m *EpochSpanMap) String() string { return proto.CompactTextString(m) }
-func (*EpochSpanMap) ProtoMessage()    {}
-func (*EpochSpanMap) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{6}
-}
-func (m *EpochSpanMap) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *EpochSpanMap) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_EpochSpanMap.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *EpochSpanMap) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_EpochSpanMap.Merge(m, src)
-}
-func (m *EpochSpanMap) XXX_Size() int {
-	return m.Size()
-}
-func (m *EpochSpanMap) XXX_DiscardUnknown() {
-	xxx_messageInfo_EpochSpanMap.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_EpochSpanMap proto.InternalMessageInfo
-
-func (m *EpochSpanMap) GetEpochSpanMap() map[uint64]*MinMaxEpochSpan {
-	if m != nil {
-		return m.EpochSpanMap
-	}
-	return nil
-}
-
 type ProposalHistory struct {
 	EpochBits            github_com_prysmaticlabs_go_bitfield.Bitlist `protobuf:"bytes,1,opt,name=epoch_bits,json=epochBits,proto3,casttype=github.com/prysmaticlabs/go-bitfield.Bitlist" json:"epoch_bits,omitempty"`
 	LatestEpochWritten   uint64                                       `protobuf:"varint,2,opt,name=latest_epoch_written,json=latestEpochWritten,proto3" json:"latest_epoch_written,omitempty"`
@@ -434,7 +183,7 @@ func (m *ProposalHistory) Reset()         { *m = ProposalHistory{} }
 func (m *ProposalHistory) String() string { return proto.CompactTextString(m) }
 func (*ProposalHistory) ProtoMessage()    {}
 func (*ProposalHistory) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{7}
+	return fileDescriptor_da7e95107d0081b4, []int{3}
 }
 func (m *ProposalHistory) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -489,7 +238,7 @@ func (m *AttestationHistory) Reset()         { *m = AttestationHistory{} }
 func (m *AttestationHistory) String() string { return proto.CompactTextString(m) }
 func (*AttestationHistory) ProtoMessage()    {}
 func (*AttestationHistory) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{8}
+	return fileDescriptor_da7e95107d0081b4, []int{4}
 }
 func (m *AttestationHistory) XXX_Unmarshal(b []byte) error {
 	return m.Unmarshal(b)
@@ -532,125 +281,53 @@ func (m *AttestationHistory) GetLatestEpochWritten() uint64 {
 	return 0
 }
 
-type SlashingStatusRequest struct {
-	Status               SlashingStatusRequest_SlashingStatus `protobuf:"varint,1,opt,name=status,proto3,enum=ethereum.slashing.SlashingStatusRequest_SlashingStatus" json:"status,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}                             `json:"-"`
-	XXX_unrecognized     []byte                               `json:"-"`
-	XXX_sizecache        int32                                `json:"-"`
-}
-
-func (m *SlashingStatusRequest) Reset()         { *m = SlashingStatusRequest{} }
-func (m *SlashingStatusRequest) String() string { return proto.CompactTextString(m) }
-func (*SlashingStatusRequest) ProtoMessage()    {}
-func (*SlashingStatusRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_da7e95107d0081b4, []int{9}
-}
-func (m *SlashingStatusRequest) XXX_Unmarshal(b []byte) error {
-	return m.Unmarshal(b)
-}
-func (m *SlashingStatusRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
-	if deterministic {
-		return xxx_messageInfo_SlashingStatusRequest.Marshal(b, m, deterministic)
-	} else {
-		b = b[:cap(b)]
-		n, err := m.MarshalToSizedBuffer(b)
-		if err != nil {
-			return nil, err
-		}
-		return b[:n], nil
-	}
-}
-func (m *SlashingStatusRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_SlashingStatusRequest.Merge(m, src)
-}
-func (m *SlashingStatusRequest) XXX_Size() int {
-	return m.Size()
-}
-func (m *SlashingStatusRequest) XXX_DiscardUnknown() {
-	xxx_messageInfo_SlashingStatusRequest.DiscardUnknown(m)
-}
-
-var xxx_messageInfo_SlashingStatusRequest proto.InternalMessageInfo
-
-func (m *SlashingStatusRequest) GetStatus() SlashingStatusRequest_SlashingStatus {
-	if m != nil {
-		return m.Status
-	}
-	return SlashingStatusRequest_Unknown
-}
-
 func init() {
-	proto.RegisterEnum("ethereum.slashing.SlashingStatusRequest_SlashingStatus", SlashingStatusRequest_SlashingStatus_name, SlashingStatusRequest_SlashingStatus_value)
-	proto.RegisterType((*CompressedIdxAtt)(nil), "ethereum.slashing.CompressedIdxAtt")
-	proto.RegisterType((*CompressedIdxAttList)(nil), "ethereum.slashing.CompressedIdxAttList")
-	proto.RegisterType((*ProposerSlashingRequest)(nil), "ethereum.slashing.ProposerSlashingRequest")
 	proto.RegisterType((*ProposerSlashingResponse)(nil), "ethereum.slashing.ProposerSlashingResponse")
+	proto.RegisterType((*Slashable)(nil), "ethereum.slashing.Slashable")
 	proto.RegisterType((*AttesterSlashingResponse)(nil), "ethereum.slashing.AttesterSlashingResponse")
-	proto.RegisterType((*MinMaxEpochSpan)(nil), "ethereum.slashing.MinMaxEpochSpan")
-	proto.RegisterType((*EpochSpanMap)(nil), "ethereum.slashing.EpochSpanMap")
-	proto.RegisterMapType((map[uint64]*MinMaxEpochSpan)(nil), "ethereum.slashing.EpochSpanMap.EpochSpanMapEntry")
 	proto.RegisterType((*ProposalHistory)(nil), "ethereum.slashing.ProposalHistory")
 	proto.RegisterType((*AttestationHistory)(nil), "ethereum.slashing.AttestationHistory")
 	proto.RegisterMapType((map[uint64]uint64)(nil), "ethereum.slashing.AttestationHistory.TargetToSourceEntry")
-	proto.RegisterType((*SlashingStatusRequest)(nil), "ethereum.slashing.SlashingStatusRequest")
 }
 
 func init() { proto.RegisterFile("proto/slashing/slashing.proto", fileDescriptor_da7e95107d0081b4) }
 
 var fileDescriptor_da7e95107d0081b4 = []byte{
-	// 825 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x55, 0xdd, 0x6e, 0xe3, 0x54,
-	0x10, 0xc6, 0x4d, 0xd8, 0x6e, 0x27, 0x21, 0x75, 0x0f, 0x05, 0xa2, 0x00, 0xdd, 0xca, 0x20, 0x6d,
-	0xf9, 0x59, 0x67, 0x1b, 0x2e, 0x76, 0xe1, 0xae, 0x41, 0x95, 0xb6, 0x12, 0x55, 0xc1, 0x29, 0xda,
-	0x2b, 0x64, 0x1d, 0xdb, 0xb3, 0xce, 0xa1, 0xce, 0x39, 0xc6, 0x67, 0x9c, 0x6d, 0xdf, 0x03, 0x9e,
-	0x83, 0x57, 0xe0, 0x92, 0x0b, 0x2e, 0x78, 0x02, 0x84, 0xfa, 0x00, 0x3c, 0x00, 0x57, 0xc8, 0xc7,
-	0x4e, 0xeb, 0x26, 0x8e, 0xb4, 0x2b, 0xee, 0x3c, 0xdf, 0xfc, 0x7c, 0x33, 0xdf, 0xd8, 0x63, 0xf8,
-	0x30, 0xcd, 0x14, 0xa9, 0xa1, 0x4e, 0xb8, 0x9e, 0x0a, 0x19, 0xdf, 0x3c, 0xb8, 0x06, 0x67, 0x3b,
-	0x48, 0x53, 0xcc, 0x30, 0x9f, 0xb9, 0x0b, 0xc7, 0xe0, 0x01, 0xd2, 0x74, 0x38, 0x3f, 0xe4, 0x49,
-	0x3a, 0xe5, 0x87, 0xc3, 0x00, 0x79, 0xa8, 0xa4, 0x1f, 0x24, 0x2a, 0xbc, 0x28, 0x73, 0x06, 0x8f,
-	0x62, 0x41, 0xd3, 0x3c, 0x70, 0x43, 0x35, 0x1b, 0xc6, 0x2a, 0x56, 0x43, 0x03, 0x07, 0xf9, 0x0b,
-	0x63, 0x95, 0x7c, 0xc5, 0x53, 0x19, 0xee, 0xc4, 0x60, 0x7f, 0xad, 0x66, 0x69, 0x86, 0x5a, 0x63,
-	0x74, 0x12, 0x5d, 0x1e, 0x11, 0xb1, 0x3e, 0x6c, 0x0a, 0x19, 0x89, 0x10, 0x75, 0xdf, 0xda, 0x6f,
-	0x1d, 0xb4, 0xbd, 0x85, 0xc9, 0xde, 0x87, 0xad, 0x88, 0x13, 0xf7, 0x33, 0xa5, 0xa8, 0xbf, 0xb1,
-	0x6f, 0x1d, 0x74, 0xbd, 0xfb, 0x05, 0xe0, 0x29, 0x45, 0xec, 0x03, 0xd8, 0xd2, 0x22, 0x96, 0x9c,
-	0xf2, 0x0c, 0xfb, 0x2d, 0xe3, 0xbc, 0x05, 0x9c, 0x33, 0xd8, 0x5d, 0x26, 0xfa, 0x46, 0x68, 0x62,
-	0x4f, 0xa0, 0x9d, 0x08, 0x4d, 0x86, 0xa9, 0x33, 0xfa, 0xc8, 0x5d, 0x19, 0xd9, 0x5d, 0x4e, 0xf3,
-	0x4c, 0x82, 0xf3, 0x8b, 0x05, 0xef, 0x7d, 0x9b, 0xa9, 0x54, 0x69, 0xcc, 0x26, 0x55, 0xac, 0x87,
-	0x3f, 0xe5, 0xa8, 0x89, 0x7d, 0x07, 0x5d, 0xa3, 0x89, 0x3f, 0x45, 0x1e, 0x61, 0xd6, 0xb7, 0xf6,
-	0xad, 0x83, 0xce, 0xc8, 0xbd, 0x2d, 0x8e, 0x34, 0x75, 0x17, 0x2a, 0xba, 0x13, 0x11, 0x4b, 0x8c,
-	0xc6, 0x46, 0xcb, 0x71, 0x91, 0xf6, 0xcc, 0x64, 0x79, 0x9d, 0xe0, 0xd6, 0x60, 0x0f, 0x61, 0x7b,
-	0xce, 0x13, 0x11, 0x71, 0x52, 0x99, 0x2f, 0x64, 0x84, 0x97, 0x46, 0x80, 0xb6, 0xd7, 0xbb, 0x81,
-	0x4f, 0x0a, 0xd4, 0x49, 0xa1, 0xbf, 0xda, 0x96, 0x4e, 0x95, 0xd4, 0xc8, 0xce, 0x61, 0x27, 0xad,
-	0x7c, 0xfe, 0x62, 0xbe, 0x6a, 0xf2, 0x87, 0x6b, 0x9a, 0x5b, 0xa9, 0x65, 0xa7, 0x4b, 0x48, 0xc1,
-	0x78, 0x44, 0x84, 0x9a, 0x9a, 0x19, 0x79, 0xe5, 0x7b, 0x55, 0xc6, 0x95, 0x5a, 0x36, 0x5f, 0x42,
-	0x9c, 0x1f, 0x60, 0xfb, 0x54, 0xc8, 0x53, 0x7e, 0x79, 0x9c, 0xaa, 0x70, 0x3a, 0x49, 0xb9, 0x64,
-	0x1f, 0x43, 0x6f, 0x26, 0xa4, 0x8f, 0x05, 0xe0, 0xeb, 0x94, 0x4b, 0x23, 0xfa, 0x5b, 0x5e, 0x77,
-	0x26, 0xe4, 0xdd, 0x28, 0x7e, 0x59, 0x8f, 0xda, 0xa8, 0xa2, 0x6a, 0xb5, 0x9c, 0x3f, 0x2c, 0xe8,
-	0xde, 0x58, 0xa7, 0x3c, 0x65, 0xcf, 0xa1, 0x77, 0x9b, 0xe2, 0xcf, 0x78, 0x5a, 0x8d, 0x70, 0xd8,
-	0xf0, 0xba, 0xd4, 0x13, 0xef, 0x18, 0xc7, 0x92, 0xb2, 0x2b, 0xaf, 0x8b, 0x35, 0x68, 0x10, 0xc2,
-	0xce, 0x4a, 0x08, 0xb3, 0xa1, 0x75, 0x81, 0x57, 0xa6, 0xff, 0xb6, 0x57, 0x3c, 0xb2, 0xa7, 0xf0,
-	0xe6, 0x9c, 0x27, 0x39, 0x9a, 0x6e, 0x3b, 0x23, 0xa7, 0x81, 0x76, 0x49, 0x0f, 0xaf, 0x4c, 0xf8,
-	0x6a, 0xe3, 0xa9, 0xe5, 0xfc, 0x6c, 0xc1, 0x76, 0xb9, 0x46, 0x9e, 0x3c, 0x13, 0x9a, 0x54, 0x76,
-	0xc5, 0xce, 0x00, 0xca, 0x89, 0x02, 0x41, 0xda, 0x50, 0x75, 0xc7, 0x8f, 0xff, 0xfd, 0xeb, 0xc1,
-	0xe7, 0xb5, 0xcf, 0x37, 0xcd, 0xae, 0xf4, 0x8c, 0x93, 0x08, 0x13, 0x1e, 0xe8, 0x61, 0xac, 0x1e,
-	0x05, 0x82, 0x5e, 0x08, 0x4c, 0x22, 0x77, 0x2c, 0xa8, 0xf8, 0x06, 0xbc, 0x2d, 0x53, 0x63, 0x2c,
-	0x48, 0xb3, 0xc7, 0xb0, 0x9b, 0xf0, 0x62, 0x4d, 0x95, 0xb8, 0x2f, 0x33, 0x41, 0x84, 0xb2, 0x7a,
-	0x49, 0x59, 0xe9, 0x33, 0xed, 0x3d, 0x2f, 0x3d, 0xce, 0x3f, 0x16, 0xb0, 0x72, 0xd7, 0x9c, 0x84,
-	0x92, 0x8b, 0xce, 0x42, 0xb0, 0x89, 0x67, 0x31, 0x92, 0x4f, 0xca, 0xd7, 0x2a, 0xcf, 0x42, 0xac,
-	0xd4, 0xfe, 0xb2, 0x61, 0xec, 0xd5, 0x02, 0xee, 0xb9, 0xc9, 0x3e, 0x57, 0x13, 0x93, 0x5b, 0xaa,
-	0xde, 0xa3, 0x3b, 0xe0, 0xeb, 0x77, 0x3b, 0x38, 0x82, 0xb7, 0x1b, 0x0a, 0x37, 0xec, 0x6a, 0xb7,
-	0xbe, 0xab, 0x76, 0x7d, 0x0f, 0xbf, 0x5a, 0xf0, 0xce, 0xe2, 0x15, 0x9e, 0x10, 0xa7, 0x5c, 0x2f,
-	0xee, 0xc5, 0x19, 0xdc, 0xd3, 0x06, 0x30, 0x85, 0x7a, 0xa3, 0x27, 0x0d, 0x93, 0x36, 0x66, 0x2e,
-	0xa3, 0x55, 0x19, 0xe7, 0x18, 0x7a, 0x77, 0x3d, 0xac, 0x03, 0x9b, 0xdf, 0xcb, 0x0b, 0xa9, 0x5e,
-	0x4a, 0xfb, 0x0d, 0x06, 0x70, 0xef, 0x28, 0x24, 0x31, 0x47, 0xdb, 0x62, 0x5d, 0xb8, 0x7f, 0x22,
-	0xc3, 0x24, 0x8f, 0x30, 0xb2, 0x37, 0x0a, 0xcb, 0xc3, 0x39, 0x66, 0x84, 0x91, 0xdd, 0x1a, 0xfd,
-	0xd6, 0x82, 0x4d, 0x53, 0x07, 0x33, 0x96, 0xc2, 0xbb, 0x27, 0xda, 0x18, 0x3c, 0x48, 0xb0, 0xa6,
-	0x3b, 0xfb, 0x64, 0xcd, 0x87, 0x6c, 0xee, 0x11, 0x46, 0xb5, 0xd0, 0xc1, 0x67, 0x6b, 0x57, 0xd8,
-	0x70, 0x3b, 0x2e, 0xc0, 0xae, 0x31, 0x9a, 0xcb, 0xc8, 0x3e, 0x6d, 0x28, 0xb0, 0xe6, 0x0a, 0x37,
-	0x92, 0xad, 0x3d, 0x8d, 0x3f, 0xc2, 0xce, 0xb2, 0x4f, 0xb3, 0x83, 0x57, 0xdd, 0xc3, 0x6b, 0x73,
-	0x2d, 0x0f, 0xfd, 0x7f, 0xb9, 0xd6, 0x89, 0x38, 0xee, 0xfe, 0x7e, 0xbd, 0x67, 0xfd, 0x79, 0xbd,
-	0x67, 0xfd, 0x7d, 0xbd, 0x67, 0x05, 0xf7, 0xcc, 0x5f, 0xf7, 0x8b, 0xff, 0x02, 0x00, 0x00, 0xff,
-	0xff, 0x43, 0xb9, 0xf2, 0x52, 0xf9, 0x07, 0x00, 0x00,
+	// 537 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x54, 0xcd, 0x6e, 0xd3, 0x40,
+	0x10, 0x96, 0xdb, 0xf2, 0x93, 0xa5, 0x82, 0x74, 0xa9, 0x50, 0x14, 0x95, 0x34, 0xca, 0x85, 0x54,
+	0xd0, 0x75, 0x5b, 0x2e, 0xc0, 0xad, 0x96, 0x2a, 0xb5, 0x17, 0x40, 0x4e, 0x10, 0x47, 0x6b, 0x6d,
+	0x4f, 0xed, 0x55, 0x1d, 0xef, 0x6a, 0x77, 0x52, 0xc8, 0x7b, 0xf0, 0x36, 0xbc, 0x00, 0x47, 0x9e,
+	0x00, 0xa1, 0x3c, 0x00, 0x0f, 0xc0, 0x09, 0x79, 0x9d, 0xa4, 0x21, 0xb1, 0x11, 0xbd, 0xcd, 0xce,
+	0xec, 0x7e, 0x3f, 0xe3, 0x19, 0x93, 0xa7, 0x4a, 0x4b, 0x94, 0xae, 0xc9, 0xb8, 0x49, 0x45, 0x9e,
+	0x2c, 0x02, 0x66, 0xf3, 0x74, 0x07, 0x30, 0x05, 0x0d, 0xe3, 0x11, 0x9b, 0x17, 0xda, 0xfb, 0x80,
+	0xa9, 0x7b, 0x7d, 0xcc, 0x33, 0x95, 0xf2, 0x63, 0x37, 0x04, 0x1e, 0xc9, 0x3c, 0x08, 0x33, 0x19,
+	0x5d, 0x95, 0x6f, 0xda, 0x87, 0x89, 0xc0, 0x74, 0x1c, 0xb2, 0x48, 0x8e, 0xdc, 0x44, 0x26, 0xd2,
+	0xb5, 0xe9, 0x70, 0x7c, 0x69, 0x4f, 0x25, 0x5f, 0x11, 0x95, 0xd7, 0x7b, 0x8a, 0xb4, 0xde, 0x6b,
+	0xa9, 0xa4, 0x01, 0x3d, 0x98, 0x71, 0xf8, 0x60, 0x94, 0xcc, 0x0d, 0xd0, 0x21, 0xd9, 0x51, 0xb3,
+	0x5a, 0x30, 0x17, 0xd0, 0x72, 0xba, 0x9b, 0xfd, 0x07, 0x27, 0xcf, 0xd8, 0x42, 0x1a, 0x60, 0xca,
+	0xe6, 0x82, 0xd8, 0x1a, 0x56, 0x53, 0xad, 0x64, 0x7a, 0x07, 0xa4, 0x61, 0x63, 0x1e, 0x66, 0x40,
+	0xf7, 0x48, 0xc3, 0xcc, 0x0f, 0x2d, 0xa7, 0xeb, 0xf4, 0xef, 0xfb, 0x37, 0x89, 0x42, 0xdc, 0x29,
+	0x22, 0x18, 0xac, 0x16, 0xc7, 0x67, 0xb5, 0xff, 0x15, 0xb7, 0x86, 0xd5, 0xe4, 0x2b, 0x99, 0xde,
+	0x17, 0x87, 0x3c, 0x2a, 0x3d, 0xf0, 0xec, 0x5c, 0x18, 0x94, 0x7a, 0x42, 0xdf, 0x11, 0x02, 0x4a,
+	0x46, 0x69, 0x10, 0x0a, 0x34, 0x56, 0xe4, 0xb6, 0x77, 0xf4, 0xfb, 0xc7, 0xfe, 0x8b, 0xa5, 0x4e,
+	0x2b, 0x3d, 0x31, 0x23, 0x8e, 0x22, 0xca, 0x78, 0x68, 0xdc, 0x44, 0x1e, 0x86, 0x02, 0x2f, 0x05,
+	0x64, 0x31, 0xf3, 0x04, 0x66, 0xc2, 0xa0, 0xdf, 0xb0, 0x18, 0x9e, 0x40, 0x43, 0x8f, 0xc8, 0x6e,
+	0xc6, 0x0b, 0xe2, 0xa0, 0xc4, 0xfd, 0xa4, 0x05, 0x22, 0xe4, 0xad, 0x8d, 0xae, 0xd3, 0xdf, 0xf2,
+	0x69, 0x59, 0x3b, 0x2b, 0x4a, 0x1f, 0xcb, 0x4a, 0xef, 0x97, 0x43, 0x68, 0xa9, 0x9e, 0xa3, 0x90,
+	0xf9, 0x5c, 0x59, 0x44, 0x9a, 0xc8, 0x75, 0x02, 0x18, 0xa0, 0x0c, 0x8c, 0x1c, 0xeb, 0x08, 0x66,
+	0x2d, 0x78, 0xcd, 0xd6, 0x46, 0x87, 0xad, 0x03, 0xb0, 0xa1, 0x7d, 0x3d, 0x94, 0x03, 0xfb, 0xf6,
+	0x2c, 0x47, 0x3d, 0xf1, 0x1f, 0xe2, 0x5f, 0xc9, 0xdb, 0xab, 0x6d, 0x9f, 0x92, 0xc7, 0x15, 0xc0,
+	0xb4, 0x49, 0x36, 0xaf, 0x60, 0x62, 0x1b, 0xb8, 0xe5, 0x17, 0x21, 0xdd, 0x25, 0x77, 0xae, 0x79,
+	0x36, 0x86, 0x19, 0x56, 0x79, 0x78, 0xb3, 0xf1, 0xca, 0x39, 0xf9, 0xba, 0x49, 0xee, 0xd9, 0x8f,
+	0x02, 0x9a, 0x2a, 0xf2, 0xe4, 0xc2, 0x2c, 0x46, 0x66, 0xc9, 0x05, 0x3d, 0xa8, 0xf9, 0xd0, 0x17,
+	0x79, 0x0c, 0x9f, 0x21, 0x5e, 0xba, 0xda, 0x7e, 0x5e, 0xdb, 0x90, 0x8a, 0xd9, 0x92, 0xa4, 0xb9,
+	0xc4, 0xe8, 0x15, 0xdb, 0x45, 0x59, 0x0d, 0xd7, 0x40, 0x24, 0x39, 0xc4, 0x9e, 0x5d, 0x44, 0x7b,
+	0xf3, 0x1c, 0x78, 0x0c, 0xba, 0x92, 0xb0, 0x76, 0xd3, 0x04, 0xe9, 0x54, 0x5b, 0x7c, 0x2b, 0x3f,
+	0xa8, 0x98, 0x23, 0xdc, 0xc6, 0xea, 0x5e, 0x05, 0xf3, 0xcd, 0xc6, 0x85, 0xa4, 0xb5, 0xea, 0x6d,
+	0x41, 0xd2, 0xaf, 0x21, 0x59, 0x77, 0xf7, 0x4f, 0x0e, 0x6f, 0xfb, 0xdb, 0xb4, 0xe3, 0x7c, 0x9f,
+	0x76, 0x9c, 0x9f, 0xd3, 0x8e, 0x13, 0xde, 0xb5, 0x7f, 0x9a, 0x97, 0x7f, 0x02, 0x00, 0x00, 0xff,
+	0xff, 0x2a, 0xff, 0x62, 0x56, 0xed, 0x04, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -666,9 +343,9 @@ const _ = grpc.SupportPackageIsVersion4
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type SlasherClient interface {
 	IsSlashableAttestation(ctx context.Context, in *v1alpha1.IndexedAttestation, opts ...grpc.CallOption) (*AttesterSlashingResponse, error)
-	IsSlashableBlock(ctx context.Context, in *ProposerSlashingRequest, opts ...grpc.CallOption) (*ProposerSlashingResponse, error)
-	ProposerSlashings(ctx context.Context, in *SlashingStatusRequest, opts ...grpc.CallOption) (*ProposerSlashingResponse, error)
-	AttesterSlashings(ctx context.Context, in *SlashingStatusRequest, opts ...grpc.CallOption) (*AttesterSlashingResponse, error)
+	IsSlashableBlock(ctx context.Context, in *v1alpha1.SignedBeaconBlockHeader, opts ...grpc.CallOption) (*ProposerSlashingResponse, error)
+	IsSlashableAttestationNoUpdate(ctx context.Context, in *v1alpha1.IndexedAttestation, opts ...grpc.CallOption) (*Slashable, error)
+	IsSlashableBlockNoUpdate(ctx context.Context, in *v1alpha1.BeaconBlockHeader, opts ...grpc.CallOption) (*Slashable, error)
 }
 
 type slasherClient struct {
@@ -688,7 +365,7 @@ func (c *slasherClient) IsSlashableAttestation(ctx context.Context, in *v1alpha1
 	return out, nil
 }
 
-func (c *slasherClient) IsSlashableBlock(ctx context.Context, in *ProposerSlashingRequest, opts ...grpc.CallOption) (*ProposerSlashingResponse, error) {
+func (c *slasherClient) IsSlashableBlock(ctx context.Context, in *v1alpha1.SignedBeaconBlockHeader, opts ...grpc.CallOption) (*ProposerSlashingResponse, error) {
 	out := new(ProposerSlashingResponse)
 	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableBlock", in, out, opts...)
 	if err != nil {
@@ -697,18 +374,18 @@ func (c *slasherClient) IsSlashableBlock(ctx context.Context, in *ProposerSlashi
 	return out, nil
 }
 
-func (c *slasherClient) ProposerSlashings(ctx context.Context, in *SlashingStatusRequest, opts ...grpc.CallOption) (*ProposerSlashingResponse, error) {
-	out := new(ProposerSlashingResponse)
-	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/ProposerSlashings", in, out, opts...)
+func (c *slasherClient) IsSlashableAttestationNoUpdate(ctx context.Context, in *v1alpha1.IndexedAttestation, opts ...grpc.CallOption) (*Slashable, error) {
+	out := new(Slashable)
+	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableAttestationNoUpdate", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *slasherClient) AttesterSlashings(ctx context.Context, in *SlashingStatusRequest, opts ...grpc.CallOption) (*AttesterSlashingResponse, error) {
-	out := new(AttesterSlashingResponse)
-	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/AttesterSlashings", in, out, opts...)
+func (c *slasherClient) IsSlashableBlockNoUpdate(ctx context.Context, in *v1alpha1.BeaconBlockHeader, opts ...grpc.CallOption) (*Slashable, error) {
+	out := new(Slashable)
+	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableBlockNoUpdate", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -718,9 +395,9 @@ func (c *slasherClient) AttesterSlashings(ctx context.Context, in *SlashingStatu
 // SlasherServer is the server API for Slasher service.
 type SlasherServer interface {
 	IsSlashableAttestation(context.Context, *v1alpha1.IndexedAttestation) (*AttesterSlashingResponse, error)
-	IsSlashableBlock(context.Context, *ProposerSlashingRequest) (*ProposerSlashingResponse, error)
-	ProposerSlashings(context.Context, *SlashingStatusRequest) (*ProposerSlashingResponse, error)
-	AttesterSlashings(context.Context, *SlashingStatusRequest) (*AttesterSlashingResponse, error)
+	IsSlashableBlock(context.Context, *v1alpha1.SignedBeaconBlockHeader) (*ProposerSlashingResponse, error)
+	IsSlashableAttestationNoUpdate(context.Context, *v1alpha1.IndexedAttestation) (*Slashable, error)
+	IsSlashableBlockNoUpdate(context.Context, *v1alpha1.BeaconBlockHeader) (*Slashable, error)
 }
 
 // UnimplementedSlasherServer can be embedded to have forward compatible implementations.
@@ -730,14 +407,14 @@ type UnimplementedSlasherServer struct {
 func (*UnimplementedSlasherServer) IsSlashableAttestation(ctx context.Context, req *v1alpha1.IndexedAttestation) (*AttesterSlashingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IsSlashableAttestation not implemented")
 }
-func (*UnimplementedSlasherServer) IsSlashableBlock(ctx context.Context, req *ProposerSlashingRequest) (*ProposerSlashingResponse, error) {
+func (*UnimplementedSlasherServer) IsSlashableBlock(ctx context.Context, req *v1alpha1.SignedBeaconBlockHeader) (*ProposerSlashingResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IsSlashableBlock not implemented")
 }
-func (*UnimplementedSlasherServer) ProposerSlashings(ctx context.Context, req *SlashingStatusRequest) (*ProposerSlashingResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ProposerSlashings not implemented")
+func (*UnimplementedSlasherServer) IsSlashableAttestationNoUpdate(ctx context.Context, req *v1alpha1.IndexedAttestation) (*Slashable, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IsSlashableAttestationNoUpdate not implemented")
 }
-func (*UnimplementedSlasherServer) AttesterSlashings(ctx context.Context, req *SlashingStatusRequest) (*AttesterSlashingResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method AttesterSlashings not implemented")
+func (*UnimplementedSlasherServer) IsSlashableBlockNoUpdate(ctx context.Context, req *v1alpha1.BeaconBlockHeader) (*Slashable, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method IsSlashableBlockNoUpdate not implemented")
 }
 
 func RegisterSlasherServer(s *grpc.Server, srv SlasherServer) {
@@ -763,7 +440,7 @@ func _Slasher_IsSlashableAttestation_Handler(srv interface{}, ctx context.Contex
 }
 
 func _Slasher_IsSlashableBlock_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ProposerSlashingRequest)
+	in := new(v1alpha1.SignedBeaconBlockHeader)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -775,43 +452,43 @@ func _Slasher_IsSlashableBlock_Handler(srv interface{}, ctx context.Context, dec
 		FullMethod: "/ethereum.slashing.Slasher/IsSlashableBlock",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SlasherServer).IsSlashableBlock(ctx, req.(*ProposerSlashingRequest))
+		return srv.(SlasherServer).IsSlashableBlock(ctx, req.(*v1alpha1.SignedBeaconBlockHeader))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Slasher_ProposerSlashings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SlashingStatusRequest)
+func _Slasher_IsSlashableAttestationNoUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(v1alpha1.IndexedAttestation)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SlasherServer).ProposerSlashings(ctx, in)
+		return srv.(SlasherServer).IsSlashableAttestationNoUpdate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/ethereum.slashing.Slasher/ProposerSlashings",
+		FullMethod: "/ethereum.slashing.Slasher/IsSlashableAttestationNoUpdate",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SlasherServer).ProposerSlashings(ctx, req.(*SlashingStatusRequest))
+		return srv.(SlasherServer).IsSlashableAttestationNoUpdate(ctx, req.(*v1alpha1.IndexedAttestation))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Slasher_AttesterSlashings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SlashingStatusRequest)
+func _Slasher_IsSlashableBlockNoUpdate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(v1alpha1.BeaconBlockHeader)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(SlasherServer).AttesterSlashings(ctx, in)
+		return srv.(SlasherServer).IsSlashableBlockNoUpdate(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: "/ethereum.slashing.Slasher/AttesterSlashings",
+		FullMethod: "/ethereum.slashing.Slasher/IsSlashableBlockNoUpdate",
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SlasherServer).AttesterSlashings(ctx, req.(*SlashingStatusRequest))
+		return srv.(SlasherServer).IsSlashableBlockNoUpdate(ctx, req.(*v1alpha1.BeaconBlockHeader))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -829,160 +506,16 @@ var _Slasher_serviceDesc = grpc.ServiceDesc{
 			Handler:    _Slasher_IsSlashableBlock_Handler,
 		},
 		{
-			MethodName: "ProposerSlashings",
-			Handler:    _Slasher_ProposerSlashings_Handler,
+			MethodName: "IsSlashableAttestationNoUpdate",
+			Handler:    _Slasher_IsSlashableAttestationNoUpdate_Handler,
 		},
 		{
-			MethodName: "AttesterSlashings",
-			Handler:    _Slasher_AttesterSlashings_Handler,
+			MethodName: "IsSlashableBlockNoUpdate",
+			Handler:    _Slasher_IsSlashableBlockNoUpdate_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "proto/slashing/slashing.proto",
-}
-
-func (m *CompressedIdxAtt) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *CompressedIdxAtt) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *CompressedIdxAtt) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.Signature) > 0 {
-		i -= len(m.Signature)
-		copy(dAtA[i:], m.Signature)
-		i = encodeVarintSlashing(dAtA, i, uint64(len(m.Signature)))
-		i--
-		dAtA[i] = 0x1a
-	}
-	if len(m.DataRoot) > 0 {
-		i -= len(m.DataRoot)
-		copy(dAtA[i:], m.DataRoot)
-		i = encodeVarintSlashing(dAtA, i, uint64(len(m.DataRoot)))
-		i--
-		dAtA[i] = 0x12
-	}
-	if len(m.Indices) > 0 {
-		dAtA2 := make([]byte, len(m.Indices)*10)
-		var j1 int
-		for _, num := range m.Indices {
-			for num >= 1<<7 {
-				dAtA2[j1] = uint8(uint64(num)&0x7f | 0x80)
-				num >>= 7
-				j1++
-			}
-			dAtA2[j1] = uint8(num)
-			j1++
-		}
-		i -= j1
-		copy(dAtA[i:], dAtA2[:j1])
-		i = encodeVarintSlashing(dAtA, i, uint64(j1))
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *CompressedIdxAttList) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *CompressedIdxAttList) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *CompressedIdxAttList) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.List) > 0 {
-		for iNdEx := len(m.List) - 1; iNdEx >= 0; iNdEx-- {
-			{
-				size, err := m.List[iNdEx].MarshalToSizedBuffer(dAtA[:i])
-				if err != nil {
-					return 0, err
-				}
-				i -= size
-				i = encodeVarintSlashing(dAtA, i, uint64(size))
-			}
-			i--
-			dAtA[i] = 0xa
-		}
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *ProposerSlashingRequest) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *ProposerSlashingRequest) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *ProposerSlashingRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.ValidatorIndex != 0 {
-		i = encodeVarintSlashing(dAtA, i, uint64(m.ValidatorIndex))
-		i--
-		dAtA[i] = 0x10
-	}
-	if m.BlockHeader != nil {
-		{
-			size, err := m.BlockHeader.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintSlashing(dAtA, i, uint64(size))
-		}
-		i--
-		dAtA[i] = 0xa
-	}
-	return len(dAtA) - i, nil
 }
 
 func (m *ProposerSlashingResponse) Marshal() (dAtA []byte, err error) {
@@ -1026,6 +559,43 @@ func (m *ProposerSlashingResponse) MarshalToSizedBuffer(dAtA []byte) (int, error
 	return len(dAtA) - i, nil
 }
 
+func (m *Slashable) Marshal() (dAtA []byte, err error) {
+	size := m.Size()
+	dAtA = make([]byte, size)
+	n, err := m.MarshalToSizedBuffer(dAtA[:size])
+	if err != nil {
+		return nil, err
+	}
+	return dAtA[:n], nil
+}
+
+func (m *Slashable) MarshalTo(dAtA []byte) (int, error) {
+	size := m.Size()
+	return m.MarshalToSizedBuffer(dAtA[:size])
+}
+
+func (m *Slashable) MarshalToSizedBuffer(dAtA []byte) (int, error) {
+	i := len(dAtA)
+	_ = i
+	var l int
+	_ = l
+	if m.XXX_unrecognized != nil {
+		i -= len(m.XXX_unrecognized)
+		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if m.Slashable {
+		i--
+		if m.Slashable {
+			dAtA[i] = 1
+		} else {
+			dAtA[i] = 0
+		}
+		i--
+		dAtA[i] = 0x8
+	}
+	return len(dAtA) - i, nil
+}
+
 func (m *AttesterSlashingResponse) Marshal() (dAtA []byte, err error) {
 	size := m.Size()
 	dAtA = make([]byte, size)
@@ -1060,94 +630,6 @@ func (m *AttesterSlashingResponse) MarshalToSizedBuffer(dAtA []byte) (int, error
 				i -= size
 				i = encodeVarintSlashing(dAtA, i, uint64(size))
 			}
-			i--
-			dAtA[i] = 0xa
-		}
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *MinMaxEpochSpan) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *MinMaxEpochSpan) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *MinMaxEpochSpan) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.MaxEpochSpan != 0 {
-		i = encodeVarintSlashing(dAtA, i, uint64(m.MaxEpochSpan))
-		i--
-		dAtA[i] = 0x10
-	}
-	if m.MinEpochSpan != 0 {
-		i = encodeVarintSlashing(dAtA, i, uint64(m.MinEpochSpan))
-		i--
-		dAtA[i] = 0x8
-	}
-	return len(dAtA) - i, nil
-}
-
-func (m *EpochSpanMap) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *EpochSpanMap) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *EpochSpanMap) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if len(m.EpochSpanMap) > 0 {
-		for k := range m.EpochSpanMap {
-			v := m.EpochSpanMap[k]
-			baseI := i
-			if v != nil {
-				{
-					size, err := v.MarshalToSizedBuffer(dAtA[:i])
-					if err != nil {
-						return 0, err
-					}
-					i -= size
-					i = encodeVarintSlashing(dAtA, i, uint64(size))
-				}
-				i--
-				dAtA[i] = 0x12
-			}
-			i = encodeVarintSlashing(dAtA, i, uint64(k))
-			i--
-			dAtA[i] = 0x8
-			i = encodeVarintSlashing(dAtA, i, uint64(baseI-i))
 			i--
 			dAtA[i] = 0xa
 		}
@@ -1241,38 +723,6 @@ func (m *AttestationHistory) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *SlashingStatusRequest) Marshal() (dAtA []byte, err error) {
-	size := m.Size()
-	dAtA = make([]byte, size)
-	n, err := m.MarshalToSizedBuffer(dAtA[:size])
-	if err != nil {
-		return nil, err
-	}
-	return dAtA[:n], nil
-}
-
-func (m *SlashingStatusRequest) MarshalTo(dAtA []byte) (int, error) {
-	size := m.Size()
-	return m.MarshalToSizedBuffer(dAtA[:size])
-}
-
-func (m *SlashingStatusRequest) MarshalToSizedBuffer(dAtA []byte) (int, error) {
-	i := len(dAtA)
-	_ = i
-	var l int
-	_ = l
-	if m.XXX_unrecognized != nil {
-		i -= len(m.XXX_unrecognized)
-		copy(dAtA[i:], m.XXX_unrecognized)
-	}
-	if m.Status != 0 {
-		i = encodeVarintSlashing(dAtA, i, uint64(m.Status))
-		i--
-		dAtA[i] = 0x8
-	}
-	return len(dAtA) - i, nil
-}
-
 func encodeVarintSlashing(dAtA []byte, offset int, v uint64) int {
 	offset -= sovSlashing(v)
 	base := offset
@@ -1284,70 +734,6 @@ func encodeVarintSlashing(dAtA []byte, offset int, v uint64) int {
 	dAtA[offset] = uint8(v)
 	return base
 }
-func (m *CompressedIdxAtt) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if len(m.Indices) > 0 {
-		l = 0
-		for _, e := range m.Indices {
-			l += sovSlashing(uint64(e))
-		}
-		n += 1 + sovSlashing(uint64(l)) + l
-	}
-	l = len(m.DataRoot)
-	if l > 0 {
-		n += 1 + l + sovSlashing(uint64(l))
-	}
-	l = len(m.Signature)
-	if l > 0 {
-		n += 1 + l + sovSlashing(uint64(l))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *CompressedIdxAttList) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if len(m.List) > 0 {
-		for _, e := range m.List {
-			l = e.Size()
-			n += 1 + l + sovSlashing(uint64(l))
-		}
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *ProposerSlashingRequest) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.BlockHeader != nil {
-		l = m.BlockHeader.Size()
-		n += 1 + l + sovSlashing(uint64(l))
-	}
-	if m.ValidatorIndex != 0 {
-		n += 1 + sovSlashing(uint64(m.ValidatorIndex))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
 func (m *ProposerSlashingResponse) Size() (n int) {
 	if m == nil {
 		return 0
@@ -1366,6 +752,21 @@ func (m *ProposerSlashingResponse) Size() (n int) {
 	return n
 }
 
+func (m *Slashable) Size() (n int) {
+	if m == nil {
+		return 0
+	}
+	var l int
+	_ = l
+	if m.Slashable {
+		n += 2
+	}
+	if m.XXX_unrecognized != nil {
+		n += len(m.XXX_unrecognized)
+	}
+	return n
+}
+
 func (m *AttesterSlashingResponse) Size() (n int) {
 	if m == nil {
 		return 0
@@ -1376,49 +777,6 @@ func (m *AttesterSlashingResponse) Size() (n int) {
 		for _, e := range m.AttesterSlashing {
 			l = e.Size()
 			n += 1 + l + sovSlashing(uint64(l))
-		}
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *MinMaxEpochSpan) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.MinEpochSpan != 0 {
-		n += 1 + sovSlashing(uint64(m.MinEpochSpan))
-	}
-	if m.MaxEpochSpan != 0 {
-		n += 1 + sovSlashing(uint64(m.MaxEpochSpan))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
-func (m *EpochSpanMap) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if len(m.EpochSpanMap) > 0 {
-		for k, v := range m.EpochSpanMap {
-			_ = k
-			_ = v
-			l = 0
-			if v != nil {
-				l = v.Size()
-				l += 1 + sovSlashing(uint64(l))
-			}
-			mapEntrySize := 1 + sovSlashing(uint64(k)) + l
-			n += mapEntrySize + 1 + sovSlashing(uint64(mapEntrySize))
 		}
 	}
 	if m.XXX_unrecognized != nil {
@@ -1469,421 +827,11 @@ func (m *AttestationHistory) Size() (n int) {
 	return n
 }
 
-func (m *SlashingStatusRequest) Size() (n int) {
-	if m == nil {
-		return 0
-	}
-	var l int
-	_ = l
-	if m.Status != 0 {
-		n += 1 + sovSlashing(uint64(m.Status))
-	}
-	if m.XXX_unrecognized != nil {
-		n += len(m.XXX_unrecognized)
-	}
-	return n
-}
-
 func sovSlashing(x uint64) (n int) {
 	return (math_bits.Len64(x|1) + 6) / 7
 }
 func sozSlashing(x uint64) (n int) {
 	return sovSlashing(uint64((x << 1) ^ uint64((int64(x) >> 63))))
-}
-func (m *CompressedIdxAtt) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSlashing
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: CompressedIdxAtt: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: CompressedIdxAtt: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType == 0 {
-				var v uint64
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return ErrIntOverflowSlashing
-					}
-					if iNdEx >= l {
-						return io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					v |= uint64(b&0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				m.Indices = append(m.Indices, v)
-			} else if wireType == 2 {
-				var packedLen int
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return ErrIntOverflowSlashing
-					}
-					if iNdEx >= l {
-						return io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					packedLen |= int(b&0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				if packedLen < 0 {
-					return ErrInvalidLengthSlashing
-				}
-				postIndex := iNdEx + packedLen
-				if postIndex < 0 {
-					return ErrInvalidLengthSlashing
-				}
-				if postIndex > l {
-					return io.ErrUnexpectedEOF
-				}
-				var elementCount int
-				var count int
-				for _, integer := range dAtA[iNdEx:postIndex] {
-					if integer < 128 {
-						count++
-					}
-				}
-				elementCount = count
-				if elementCount != 0 && len(m.Indices) == 0 {
-					m.Indices = make([]uint64, 0, elementCount)
-				}
-				for iNdEx < postIndex {
-					var v uint64
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowSlashing
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						v |= uint64(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-					m.Indices = append(m.Indices, v)
-				}
-			} else {
-				return fmt.Errorf("proto: wrong wireType = %d for field Indices", wireType)
-			}
-		case 2:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DataRoot", wireType)
-			}
-			var byteLen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				byteLen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if byteLen < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			postIndex := iNdEx + byteLen
-			if postIndex < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.DataRoot = append(m.DataRoot[:0], dAtA[iNdEx:postIndex]...)
-			if m.DataRoot == nil {
-				m.DataRoot = []byte{}
-			}
-			iNdEx = postIndex
-		case 3:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Signature", wireType)
-			}
-			var byteLen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				byteLen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if byteLen < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			postIndex := iNdEx + byteLen
-			if postIndex < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.Signature = append(m.Signature[:0], dAtA[iNdEx:postIndex]...)
-			if m.Signature == nil {
-				m.Signature = []byte{}
-			}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSlashing(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *CompressedIdxAttList) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSlashing
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: CompressedIdxAttList: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: CompressedIdxAttList: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field List", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.List = append(m.List, &CompressedIdxAtt{})
-			if err := m.List[len(m.List)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSlashing(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *ProposerSlashingRequest) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSlashing
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: ProposerSlashingRequest: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: ProposerSlashingRequest: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field BlockHeader", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if m.BlockHeader == nil {
-				m.BlockHeader = &v1alpha1.SignedBeaconBlockHeader{}
-			}
-			if err := m.BlockHeader.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
-				return err
-			}
-			iNdEx = postIndex
-		case 2:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ValidatorIndex", wireType)
-			}
-			m.ValidatorIndex = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.ValidatorIndex |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSlashing(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
 }
 func (m *ProposerSlashingResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -1973,6 +921,80 @@ func (m *ProposerSlashingResponse) Unmarshal(dAtA []byte) error {
 	}
 	return nil
 }
+func (m *Slashable) Unmarshal(dAtA []byte) error {
+	l := len(dAtA)
+	iNdEx := 0
+	for iNdEx < l {
+		preIndex := iNdEx
+		var wire uint64
+		for shift := uint(0); ; shift += 7 {
+			if shift >= 64 {
+				return ErrIntOverflowSlashing
+			}
+			if iNdEx >= l {
+				return io.ErrUnexpectedEOF
+			}
+			b := dAtA[iNdEx]
+			iNdEx++
+			wire |= uint64(b&0x7F) << shift
+			if b < 0x80 {
+				break
+			}
+		}
+		fieldNum := int32(wire >> 3)
+		wireType := int(wire & 0x7)
+		if wireType == 4 {
+			return fmt.Errorf("proto: Slashable: wiretype end group for non-group")
+		}
+		if fieldNum <= 0 {
+			return fmt.Errorf("proto: Slashable: illegal tag %d (wire type %d)", fieldNum, wire)
+		}
+		switch fieldNum {
+		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Slashable", wireType)
+			}
+			var v int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowSlashing
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				v |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			m.Slashable = bool(v != 0)
+		default:
+			iNdEx = preIndex
+			skippy, err := skipSlashing(dAtA[iNdEx:])
+			if err != nil {
+				return err
+			}
+			if skippy < 0 {
+				return ErrInvalidLengthSlashing
+			}
+			if (iNdEx + skippy) < 0 {
+				return ErrInvalidLengthSlashing
+			}
+			if (iNdEx + skippy) > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
+			iNdEx += skippy
+		}
+	}
+
+	if iNdEx > l {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
+}
 func (m *AttesterSlashingResponse) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
@@ -2035,267 +1057,6 @@ func (m *AttesterSlashingResponse) Unmarshal(dAtA []byte) error {
 			if err := m.AttesterSlashing[len(m.AttesterSlashing)-1].Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
-			iNdEx = postIndex
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSlashing(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *MinMaxEpochSpan) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSlashing
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: MinMaxEpochSpan: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: MinMaxEpochSpan: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MinEpochSpan", wireType)
-			}
-			m.MinEpochSpan = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.MinEpochSpan |= uint32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 2:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MaxEpochSpan", wireType)
-			}
-			m.MaxEpochSpan = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.MaxEpochSpan |= uint32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSlashing(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *EpochSpanMap) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSlashing
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: EpochSpanMap: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: EpochSpanMap: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field EpochSpanMap", wireType)
-			}
-			var msglen int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				msglen |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			if msglen < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			postIndex := iNdEx + msglen
-			if postIndex < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if postIndex > l {
-				return io.ErrUnexpectedEOF
-			}
-			if m.EpochSpanMap == nil {
-				m.EpochSpanMap = make(map[uint64]*MinMaxEpochSpan)
-			}
-			var mapkey uint64
-			var mapvalue *MinMaxEpochSpan
-			for iNdEx < postIndex {
-				entryPreIndex := iNdEx
-				var wire uint64
-				for shift := uint(0); ; shift += 7 {
-					if shift >= 64 {
-						return ErrIntOverflowSlashing
-					}
-					if iNdEx >= l {
-						return io.ErrUnexpectedEOF
-					}
-					b := dAtA[iNdEx]
-					iNdEx++
-					wire |= uint64(b&0x7F) << shift
-					if b < 0x80 {
-						break
-					}
-				}
-				fieldNum := int32(wire >> 3)
-				if fieldNum == 1 {
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowSlashing
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						mapkey |= uint64(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-				} else if fieldNum == 2 {
-					var mapmsglen int
-					for shift := uint(0); ; shift += 7 {
-						if shift >= 64 {
-							return ErrIntOverflowSlashing
-						}
-						if iNdEx >= l {
-							return io.ErrUnexpectedEOF
-						}
-						b := dAtA[iNdEx]
-						iNdEx++
-						mapmsglen |= int(b&0x7F) << shift
-						if b < 0x80 {
-							break
-						}
-					}
-					if mapmsglen < 0 {
-						return ErrInvalidLengthSlashing
-					}
-					postmsgIndex := iNdEx + mapmsglen
-					if postmsgIndex < 0 {
-						return ErrInvalidLengthSlashing
-					}
-					if postmsgIndex > l {
-						return io.ErrUnexpectedEOF
-					}
-					mapvalue = &MinMaxEpochSpan{}
-					if err := mapvalue.Unmarshal(dAtA[iNdEx:postmsgIndex]); err != nil {
-						return err
-					}
-					iNdEx = postmsgIndex
-				} else {
-					iNdEx = entryPreIndex
-					skippy, err := skipSlashing(dAtA[iNdEx:])
-					if err != nil {
-						return err
-					}
-					if skippy < 0 {
-						return ErrInvalidLengthSlashing
-					}
-					if (iNdEx + skippy) > postIndex {
-						return io.ErrUnexpectedEOF
-					}
-					iNdEx += skippy
-				}
-			}
-			m.EpochSpanMap[mapkey] = mapvalue
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
@@ -2572,79 +1333,6 @@ func (m *AttestationHistory) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.LatestEpochWritten |= uint64(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		default:
-			iNdEx = preIndex
-			skippy, err := skipSlashing(dAtA[iNdEx:])
-			if err != nil {
-				return err
-			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) > l {
-				return io.ErrUnexpectedEOF
-			}
-			m.XXX_unrecognized = append(m.XXX_unrecognized, dAtA[iNdEx:iNdEx+skippy]...)
-			iNdEx += skippy
-		}
-	}
-
-	if iNdEx > l {
-		return io.ErrUnexpectedEOF
-	}
-	return nil
-}
-func (m *SlashingStatusRequest) Unmarshal(dAtA []byte) error {
-	l := len(dAtA)
-	iNdEx := 0
-	for iNdEx < l {
-		preIndex := iNdEx
-		var wire uint64
-		for shift := uint(0); ; shift += 7 {
-			if shift >= 64 {
-				return ErrIntOverflowSlashing
-			}
-			if iNdEx >= l {
-				return io.ErrUnexpectedEOF
-			}
-			b := dAtA[iNdEx]
-			iNdEx++
-			wire |= uint64(b&0x7F) << shift
-			if b < 0x80 {
-				break
-			}
-		}
-		fieldNum := int32(wire >> 3)
-		wireType := int(wire & 0x7)
-		if wireType == 4 {
-			return fmt.Errorf("proto: SlashingStatusRequest: wiretype end group for non-group")
-		}
-		if fieldNum <= 0 {
-			return fmt.Errorf("proto: SlashingStatusRequest: illegal tag %d (wire type %d)", fieldNum, wire)
-		}
-		switch fieldNum {
-		case 1:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Status", wireType)
-			}
-			m.Status = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowSlashing
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.Status |= SlashingStatusRequest_SlashingStatus(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

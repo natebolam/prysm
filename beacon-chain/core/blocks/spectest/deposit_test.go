@@ -1,18 +1,19 @@
 package spectest
 
 import (
+	"context"
 	"path"
 	"testing"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/shared/params/spectest"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 )
 
 func runDepositTest(t *testing.T, config string) {
-	if err := spectest.SetConfig(config); err != nil {
+	if err := spectest.SetConfig(t, config); err != nil {
 		t.Fatal(err)
 	}
 
@@ -25,12 +26,14 @@ func runDepositTest(t *testing.T, config string) {
 				t.Fatal(err)
 			}
 			deposit := &ethpb.Deposit{}
-			if err := ssz.Unmarshal(depositFile, deposit); err != nil {
+			if err := deposit.UnmarshalSSZ(depositFile); err != nil {
 				t.Fatalf("Failed to unmarshal: %v", err)
 			}
 
 			body := &ethpb.BeaconBlockBody{Deposits: []*ethpb.Deposit{deposit}}
-			testutil.RunBlockOperationTest(t, folderPath, body, blocks.ProcessDeposits)
+			testutil.RunBlockOperationTest(t, folderPath, body, func(ctx context.Context, state *state.BeaconState, body *ethpb.BeaconBlockBody) (*state.BeaconState, error) {
+				return blocks.ProcessDeposits(ctx, state, body.Deposits)
+			})
 		})
 	}
 }

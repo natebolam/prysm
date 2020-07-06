@@ -7,7 +7,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	contracts "github.com/prysmaticlabs/prysm/contracts/deposit-contract"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
@@ -47,12 +46,12 @@ func TestMarshalDepositWithProof(t *testing.T) {
 			Signature:             someSig[:],
 		},
 	}
-	enc, err := ssz.Marshal(dep)
+	enc, err := dep.MarshalSSZ()
 	if err != nil {
 		t.Fatal(err)
 	}
 	dec := &ethpb.Deposit{}
-	if err := ssz.Unmarshal(enc, &dec); err != nil {
+	if err := dec.UnmarshalSSZ(enc); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(dec, dep) {
@@ -129,17 +128,17 @@ func TestMerkleTrie_VerifyMerkleProof(t *testing.T) {
 		t.Errorf("Received len %d, wanted 33", len(proof))
 	}
 	root := m.Root()
-	if ok := VerifyMerkleProof(root[:], items[0], 0, proof); !ok {
+	if ok := VerifyMerkleBranch(root[:], items[0], 0, proof); !ok {
 		t.Error("First Merkle proof did not verify")
 	}
 	proof, err = m.MerkleProof(3)
 	if err != nil {
 		t.Fatalf("Could not generate Merkle proof: %v", err)
 	}
-	if ok := VerifyMerkleProof(root[:], items[3], 3, proof); !ok {
+	if ok := VerifyMerkleBranch(root[:], items[3], 3, proof); !ok {
 		t.Error("Second Merkle proof did not verify")
 	}
-	if ok := VerifyMerkleProof(root[:], []byte("buzz"), 3, proof); ok {
+	if ok := VerifyMerkleBranch(root[:], []byte("buzz"), 3, proof); ok {
 		t.Error("Item not in tree should fail to verify")
 	}
 }
@@ -160,7 +159,7 @@ func TestMerkleTrie_VerifyMerkleProof_TrieUpdated(t *testing.T) {
 		t.Fatalf("Could not generate Merkle proof: %v", err)
 	}
 	root := m.Root()
-	if ok := VerifyMerkleProof(root[:], items[0], 0, proof); !ok {
+	if ok := VerifyMerkleBranch(root[:], items[0], 0, proof); !ok {
 		t.Error("First Merkle proof did not verify")
 	}
 
@@ -171,10 +170,10 @@ func TestMerkleTrie_VerifyMerkleProof_TrieUpdated(t *testing.T) {
 		t.Fatalf("Could not generate Merkle proof: %v", err)
 	}
 	root = m.Root()
-	if ok := VerifyMerkleProof(root[:], []byte{5}, 3, proof); !ok {
+	if ok := VerifyMerkleBranch(root[:], []byte{5}, 3, proof); !ok {
 		t.Error("Second Merkle proof did not verify")
 	}
-	if ok := VerifyMerkleProof(root[:], []byte{4}, 3, proof); ok {
+	if ok := VerifyMerkleBranch(root[:], []byte{4}, 3, proof); ok {
 		t.Error("Old item should not verify")
 	}
 
@@ -284,7 +283,7 @@ func BenchmarkVerifyMerkleBranch(b *testing.B) {
 	root := m.Root()
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		if ok := VerifyMerkleProof(root[:], items[2], 2, proof); !ok {
+		if ok := VerifyMerkleBranch(root[:], items[2], 2, proof); !ok {
 			b.Error("Merkle proof did not verify")
 		}
 	}

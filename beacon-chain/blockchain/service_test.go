@@ -3,7 +3,6 @@ package blockchain
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"io/ioutil"
 	"reflect"
 	"testing"
@@ -12,7 +11,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	ssz "github.com/prysmaticlabs/go-ssz"
+	"github.com/prysmaticlabs/go-ssz"
+	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache/depositcache"
 	b "github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
@@ -20,15 +20,17 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
-	"github.com/prysmaticlabs/prysm/beacon-chain/db/filters"
 	testDB "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/forkchoice/protoarray"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/attestations"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	protodb "github.com/prysmaticlabs/prysm/proto/beacon/db"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
@@ -39,42 +41,6 @@ import (
 func init() {
 	logrus.SetLevel(logrus.DebugLevel)
 	logrus.SetOutput(ioutil.Discard)
-}
-
-type store struct {
-	headRoot []byte
-}
-
-func (s *store) OnBlock(ctx context.Context, b *ethpb.SignedBeaconBlock) (*beaconstate.BeaconState, error) {
-	return nil, nil
-}
-
-func (s *store) OnBlockCacheFilteredTree(ctx context.Context, b *ethpb.SignedBeaconBlock) (*beaconstate.BeaconState, error) {
-	return nil, nil
-}
-
-func (s *store) OnBlockInitialSyncStateTransition(ctx context.Context, b *ethpb.SignedBeaconBlock) (*beaconstate.BeaconState, error) {
-	return nil, nil
-}
-
-func (s *store) OnAttestation(ctx context.Context, a *ethpb.Attestation) ([]uint64, error) {
-	return nil, nil
-}
-
-func (s *store) GenesisStore(ctx context.Context, justifiedCheckpoint *ethpb.Checkpoint, finalizedCheckpoint *ethpb.Checkpoint) error {
-	return nil
-}
-
-func (s *store) FinalizedCheckpt() *ethpb.Checkpoint {
-	return nil
-}
-
-func (s *store) JustifiedCheckpt() *ethpb.Checkpoint {
-	return nil
-}
-
-func (s *store) Head(ctx context.Context) ([]byte, error) {
-	return s.headRoot, nil
 }
 
 type mockBeaconNode struct {
@@ -98,10 +64,15 @@ func (mb *mockBroadcaster) Broadcast(_ context.Context, _ proto.Message) error {
 	return nil
 }
 
+func (mb *mockBroadcaster) BroadcastAttestation(_ context.Context, _ uint64, _ *ethpb.Attestation) error {
+	mb.broadcastCalled = true
+	return nil
+}
+
 var _ = p2p.Broadcaster(&mockBroadcaster{})
 
-func setupBeaconChain(t *testing.T, beaconDB db.Database) *Service {
-	endpoint := "ws://127.0.0.1"
+func setupBeaconChain(t *testing.T, beaconDB db.Database, sc *cache.StateSummaryCache) *Service {
+	endpoint := "http://127.0.0.1"
 	ctx := context.Background()
 	var web3Service *powchain.Service
 	var err error
@@ -126,13 +97,17 @@ func setupBeaconChain(t *testing.T, beaconDB db.Database) *Service {
 	}
 	web3Service, err = powchain.NewService(ctx, &powchain.Web3ServiceConfig{
 		BeaconDB:        beaconDB,
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: common.Address{},
 	})
 	if err != nil {
 		t.Fatalf("unable to set up web3 service: %v", err)
 	}
 
+	opsService, err := attestations.NewService(ctx, &attestations.Config{Pool: attestations.NewPool()})
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := &Config{
 		BeaconBlockBuf:    0,
 		BeaconDB:          beaconDB,
@@ -141,11 +116,11 @@ func setupBeaconChain(t *testing.T, beaconDB db.Database) *Service {
 		P2p:               &mockBroadcaster{},
 		StateNotifier:     &mockBeaconNode{},
 		AttPool:           attestations.NewPool(),
+		StateGen:          stategen.New(beaconDB, sc),
 		ForkChoiceStore:   protoarray.New(0, 0, params.BeaconConfig().ZeroHash),
+		OpsService:        opsService,
 	}
-	if err != nil {
-		t.Fatalf("could not register blockchain service: %v", err)
-	}
+
 	chainService, err := NewService(ctx, cfg)
 	if err != nil {
 		t.Fatalf("unable to setup chain service: %v", err)
@@ -157,9 +132,8 @@ func setupBeaconChain(t *testing.T, beaconDB db.Database) *Service {
 
 func TestChainStartStop_Uninitialized(t *testing.T) {
 	hook := logTest.NewGlobal()
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
-	chainService := setupBeaconChain(t, db)
+	db, sc := testDB.SetupDB(t)
+	chainService := setupBeaconChain(t, db, sc)
 
 	// Listen for state events.
 	stateSubChannel := make(chan *feed.Event, 1)
@@ -213,21 +187,20 @@ func TestChainStartStop_Uninitialized(t *testing.T) {
 func TestChainStartStop_Initialized(t *testing.T) {
 	hook := logTest.NewGlobal()
 	ctx := context.Background()
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
+	db, sc := testDB.SetupDB(t)
 
-	chainService := setupBeaconChain(t, db)
+	chainService := setupBeaconChain(t, db, sc)
 
-	genesisBlk := b.NewGenesisBlock([]byte{})
-	blkRoot, err := ssz.HashTreeRoot(genesisBlk.Block)
+	genesisBlk := testutil.NewBeaconBlock()
+	blkRoot, err := stateutil.BlockRoot(genesisBlk.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveBlock(ctx, genesisBlk); err != nil {
 		t.Fatal(err)
 	}
-	s, err := beaconstate.InitializeFromProto(&pb.BeaconState{Slot: 1})
-	if err != nil {
+	s := testutil.NewBeaconState()
+	if err := s.SetSlot(1); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveState(ctx, s, blkRoot); err != nil {
@@ -258,16 +231,19 @@ func TestChainStartStop_Initialized(t *testing.T) {
 }
 
 func TestChainService_InitializeBeaconChain(t *testing.T) {
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
+	helpers.ClearCache()
+	db, sc := testDB.SetupDB(t)
 	ctx := context.Background()
 
-	bc := setupBeaconChain(t, db)
+	bc := setupBeaconChain(t, db, sc)
 	var err error
 
 	// Set up 10 deposits pre chain start for validators to register
 	count := uint64(10)
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(count)
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(count)
+	if err != nil {
+		t.Fatal(err)
+	}
 	trie, _, err := testutil.DepositTrieFromDeposits(deposits)
 	if err != nil {
 		t.Fatal(err)
@@ -277,29 +253,19 @@ func TestChainService_InitializeBeaconChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	genState.SetEth1Data(&ethpb.Eth1Data{
+	err = genState.SetEth1Data(&ethpb.Eth1Data{
 		DepositRoot:  hashTreeRoot[:],
 		DepositCount: uint64(len(deposits)),
 	})
-	genState, err = b.ProcessDeposits(ctx, genState, &ethpb.BeaconBlockBody{Deposits: deposits})
+	genState, err = b.ProcessPreGenesisDeposits(ctx, genState, deposits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := bc.initializeBeaconChain(ctx, time.Unix(0, 0), genState, &ethpb.Eth1Data{
+
+	if _, err := bc.initializeBeaconChain(ctx, time.Unix(0, 0), genState, &ethpb.Eth1Data{
 		DepositRoot: hashTreeRoot[:],
 	}); err != nil {
 		t.Fatal(err)
-	}
-
-	s, err := bc.beaconDB.State(ctx, bc.headRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for _, v := range s.Validators() {
-		if !db.HasValidatorIndex(ctx, v.PublicKey) {
-			t.Errorf("Validator %s missing from db", hex.EncodeToString(v.PublicKey))
-		}
 	}
 
 	if _, err := bc.HeadState(ctx); err != nil {
@@ -318,12 +284,11 @@ func TestChainService_InitializeBeaconChain(t *testing.T) {
 }
 
 func TestChainService_InitializeChainInfo(t *testing.T) {
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
+	db, sc := testDB.SetupDB(t)
 	ctx := context.Background()
 
-	genesis := b.NewGenesisBlock([]byte{})
-	genesisRoot, err := ssz.HashTreeRoot(genesis.Block)
+	genesis := testutil.NewBeaconBlock()
+	genesisRoot, err := stateutil.BlockRoot(genesis.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,13 +300,24 @@ func TestChainService_InitializeChainInfo(t *testing.T) {
 	}
 
 	finalizedSlot := params.BeaconConfig().SlotsPerEpoch*2 + 1
-	headBlock := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: finalizedSlot, ParentRoot: genesisRoot[:]}}
-	headState, err := beaconstate.InitializeFromProto(&pb.BeaconState{Slot: finalizedSlot})
+	headBlock := testutil.NewBeaconBlock()
+	headBlock.Block.Slot = finalizedSlot
+	headBlock.Block.ParentRoot = bytesutil.PadTo(genesisRoot[:], 32)
+	headState := testutil.NewBeaconState()
+	if err := headState.SetSlot(finalizedSlot); err != nil {
+		t.Fatal(err)
+	}
+	if err := headState.SetGenesisValidatorRoot(params.BeaconConfig().ZeroHash[:]); err != nil {
+		t.Fatal(err)
+	}
+	headRoot, err := stateutil.BlockRoot(headBlock.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
-	headRoot, _ := ssz.HashTreeRoot(headBlock.Block)
 	if err := db.SaveState(ctx, headState, headRoot); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveState(ctx, headState, genesisRoot); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.SaveBlock(ctx, headBlock); err != nil {
@@ -353,10 +329,7 @@ func TestChainService_InitializeChainInfo(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveBlock(ctx, headBlock); err != nil {
-		t.Fatal(err)
-	}
-	c := &Service{beaconDB: db}
+	c := &Service{beaconDB: db, stateGen: stategen.New(db, sc)}
 	if err := c.initializeChainInfo(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -390,17 +363,22 @@ func TestChainService_InitializeChainInfo(t *testing.T) {
 }
 
 func TestChainService_SaveHeadNoDB(t *testing.T) {
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
+	db, sc := testDB.SetupDB(t)
 	ctx := context.Background()
 	s := &Service{
 		beaconDB: db,
+		stateGen: stategen.New(db, sc),
 	}
 	b := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: 1}}
-	r, _ := ssz.HashTreeRoot(b)
-	state := &pb.BeaconState{}
-	newState, err := beaconstate.InitializeFromProto(state)
-	s.beaconDB.SaveState(ctx, newState, r)
+	r, err := ssz.HashTreeRoot(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newState := testutil.NewBeaconState()
+	if err := s.stateGen.SaveState(ctx, r, newState); err != nil {
+		t.Fatal(err)
+	}
+
 	if err := s.saveHeadNoDB(ctx, b, r); err != nil {
 		t.Fatal(err)
 	}
@@ -414,68 +392,24 @@ func TestChainService_SaveHeadNoDB(t *testing.T) {
 	}
 }
 
-func TestChainService_PruneOldStates(t *testing.T) {
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
-	ctx := context.Background()
-	s := &Service{
-		beaconDB: db,
-	}
-
-	for i := 0; i < 100; i++ {
-		block := &ethpb.BeaconBlock{Slot: uint64(i)}
-		if err := s.beaconDB.SaveBlock(ctx, &ethpb.SignedBeaconBlock{Block: block}); err != nil {
-			t.Fatal(err)
-		}
-		r, err := ssz.HashTreeRoot(block)
-		if err != nil {
-			t.Fatal(err)
-		}
-		state := &pb.BeaconState{Slot: uint64(i)}
-		newState, err := beaconstate.InitializeFromProto(state)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.beaconDB.SaveState(ctx, newState, r); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Delete half of the states.
-	if err := s.pruneGarbageState(ctx, 50); err != nil {
-		t.Fatal(err)
-	}
-
-	filter := filters.NewFilter().SetStartSlot(1).SetEndSlot(100)
-	roots, err := s.beaconDB.BlockRoots(ctx, filter)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	for i := 1; i < 50; i++ {
-		s, err := s.beaconDB.State(ctx, roots[i])
-		if err != nil {
-			t.Fatal(err)
-		}
-		if s != nil {
-			t.Errorf("wanted nil for slot %d", i)
-		}
-	}
-}
-
 func TestHasBlock_ForkChoiceAndDB(t *testing.T) {
 	ctx := context.Background()
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
+	db, _ := testDB.SetupDB(t)
 	s := &Service{
 		forkChoiceStore:  protoarray.New(0, 0, [32]byte{}),
 		finalizedCheckpt: &ethpb.Checkpoint{},
 		beaconDB:         db,
 	}
 	block := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Body: &ethpb.BeaconBlockBody{}}}
-	r, _ := ssz.HashTreeRoot(block.Block)
+	r, err := stateutil.BlockRoot(block.Block)
+	if err != nil {
+		t.Fatal(err)
+	}
 	bs := &pb.BeaconState{FinalizedCheckpoint: &ethpb.Checkpoint{}, CurrentJustifiedCheckpoint: &ethpb.Checkpoint{}}
-	state, _ := beaconstate.InitializeFromProto(bs)
+	state, err := beaconstate.InitializeFromProto(bs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := s.insertBlockToForkChoiceStore(ctx, block.Block, r, state); err != nil {
 		t.Fatal(err)
 	}
@@ -490,8 +424,7 @@ func TestHasBlock_ForkChoiceAndDB(t *testing.T) {
 }
 
 func BenchmarkHasBlockDB(b *testing.B) {
-	db := testDB.SetupDB(b)
-	defer testDB.TeardownDB(b, db)
+	db, _ := testDB.SetupDB(b)
 	ctx := context.Background()
 	s := &Service{
 		beaconDB: db,
@@ -500,7 +433,10 @@ func BenchmarkHasBlockDB(b *testing.B) {
 	if err := s.beaconDB.SaveBlock(ctx, block); err != nil {
 		b.Fatal(err)
 	}
-	r, _ := ssz.HashTreeRoot(block.Block)
+	r, err := stateutil.BlockRoot(block.Block)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -512,17 +448,22 @@ func BenchmarkHasBlockDB(b *testing.B) {
 
 func BenchmarkHasBlockForkChoiceStore(b *testing.B) {
 	ctx := context.Background()
-	db := testDB.SetupDB(b)
-	defer testDB.TeardownDB(b, db)
+	db, _ := testDB.SetupDB(b)
 	s := &Service{
 		forkChoiceStore:  protoarray.New(0, 0, [32]byte{}),
 		finalizedCheckpt: &ethpb.Checkpoint{},
 		beaconDB:         db,
 	}
 	block := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Body: &ethpb.BeaconBlockBody{}}}
-	r, _ := ssz.HashTreeRoot(block.Block)
+	r, err := stateutil.BlockRoot(block.Block)
+	if err != nil {
+		b.Fatal(err)
+	}
 	bs := &pb.BeaconState{FinalizedCheckpoint: &ethpb.Checkpoint{}, CurrentJustifiedCheckpoint: &ethpb.Checkpoint{}}
-	state, _ := beaconstate.InitializeFromProto(bs)
+	state, err := beaconstate.InitializeFromProto(bs)
+	if err != nil {
+		b.Fatal(err)
+	}
 	if err := s.insertBlockToForkChoiceStore(ctx, block.Block, r, state); err != nil {
 		b.Fatal(err)
 	}

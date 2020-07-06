@@ -6,11 +6,12 @@ package mock
 
 import (
 	context "context"
-	empty "github.com/gogo/protobuf/types"
+	reflect "reflect"
+
+	types "github.com/gogo/protobuf/types"
 	gomock "github.com/golang/mock/gomock"
 	v1alpha1 "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	grpc "google.golang.org/grpc"
-	reflect "reflect"
 )
 
 // MockNodeClient is a mock of NodeClient interface
@@ -37,7 +38,7 @@ func (m *MockNodeClient) EXPECT() *MockNodeClientMockRecorder {
 }
 
 // GetGenesis mocks base method
-func (m *MockNodeClient) GetGenesis(arg0 context.Context, arg1 *empty.Empty, arg2 ...grpc.CallOption) (*v1alpha1.Genesis, error) {
+func (m *MockNodeClient) GetGenesis(arg0 context.Context, arg1 *types.Empty, arg2 ...grpc.CallOption) (*v1alpha1.Genesis, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
@@ -56,8 +57,48 @@ func (mr *MockNodeClientMockRecorder) GetGenesis(arg0, arg1 interface{}, arg2 ..
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetGenesis", reflect.TypeOf((*MockNodeClient)(nil).GetGenesis), varargs...)
 }
 
+// GetHost mocks base method
+func (m *MockNodeClient) GetHost(arg0 context.Context, arg1 *types.Empty, arg2 ...grpc.CallOption) (*v1alpha1.HostData, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetHost", varargs...)
+	ret0, _ := ret[0].(*v1alpha1.HostData)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetHost indicates an expected call of GetHost
+func (mr *MockNodeClientMockRecorder) GetHost(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetHost", reflect.TypeOf((*MockNodeClient)(nil).GetHost), varargs...)
+}
+
+// GetPeer mocks base method
+func (m *MockNodeClient) GetPeer(arg0 context.Context, arg1 *v1alpha1.PeerRequest, arg2 ...grpc.CallOption) (*v1alpha1.Peer, error) {
+	m.ctrl.T.Helper()
+	varargs := []interface{}{arg0, arg1}
+	for _, a := range arg2 {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetPeer", varargs...)
+	ret0, _ := ret[0].(*v1alpha1.Peer)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPeer indicates an expected call of GetPeer
+func (mr *MockNodeClientMockRecorder) GetPeer(arg0, arg1 interface{}, arg2 ...interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	varargs := append([]interface{}{arg0, arg1}, arg2...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPeer", reflect.TypeOf((*MockNodeClient)(nil).GetPeer), varargs...)
+}
+
 // GetSyncStatus mocks base method
-func (m *MockNodeClient) GetSyncStatus(arg0 context.Context, arg1 *empty.Empty, arg2 ...grpc.CallOption) (*v1alpha1.SyncStatus, error) {
+func (m *MockNodeClient) GetSyncStatus(arg0 context.Context, arg1 *types.Empty, arg2 ...grpc.CallOption) (*v1alpha1.SyncStatus, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
@@ -77,7 +118,7 @@ func (mr *MockNodeClientMockRecorder) GetSyncStatus(arg0, arg1 interface{}, arg2
 }
 
 // GetVersion mocks base method
-func (m *MockNodeClient) GetVersion(arg0 context.Context, arg1 *empty.Empty, arg2 ...grpc.CallOption) (*v1alpha1.Version, error) {
+func (m *MockNodeClient) GetVersion(arg0 context.Context, arg1 *types.Empty, arg2 ...grpc.CallOption) (*v1alpha1.Version, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
@@ -97,7 +138,7 @@ func (mr *MockNodeClientMockRecorder) GetVersion(arg0, arg1 interface{}, arg2 ..
 }
 
 // ListImplementedServices mocks base method
-func (m *MockNodeClient) ListImplementedServices(arg0 context.Context, arg1 *empty.Empty, arg2 ...grpc.CallOption) (*v1alpha1.ImplementedServices, error) {
+func (m *MockNodeClient) ListImplementedServices(arg0 context.Context, arg1 *types.Empty, arg2 ...grpc.CallOption) (*v1alpha1.ImplementedServices, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {
@@ -117,7 +158,7 @@ func (mr *MockNodeClientMockRecorder) ListImplementedServices(arg0, arg1 interfa
 }
 
 // ListPeers mocks base method
-func (m *MockNodeClient) ListPeers(arg0 context.Context, arg1 *empty.Empty, arg2 ...grpc.CallOption) (*v1alpha1.Peers, error) {
+func (m *MockNodeClient) ListPeers(arg0 context.Context, arg1 *types.Empty, arg2 ...grpc.CallOption) (*v1alpha1.Peers, error) {
 	m.ctrl.T.Helper()
 	varargs := []interface{}{arg0, arg1}
 	for _, a := range arg2 {

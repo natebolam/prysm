@@ -1,13 +1,13 @@
-// Package powchain defines the services that interact with the ETH1.0 of Ethereum.
+// Package powchain defines a runtime service which is tasked with
+// communicating with an eth1 endpoint, processing logs from a deposit
+// contract, and the latest eth1 data headers for usage in the beacon node.
 package powchain
 
 import (
 	"context"
-	"fmt"
 	"math/big"
 	"reflect"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +31,7 @@ import (
 	protodb "github.com/prysmaticlabs/prysm/proto/beacon/db"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/roughtime"
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
 	"github.com/sirupsen/logrus"
 )
@@ -54,11 +55,6 @@ var (
 
 // time to wait before trying to reconnect with the eth1 node.
 var backOffPeriod = 6 * time.Second
-
-// Reader defines a struct that can fetch latest header events from a web3 endpoint.
-type Reader interface {
-	SubscribeNewHead(ctx context.Context, ch chan<- *gethTypes.Header) (ethereum.Subscription, error)
-}
 
 // ChainStartFetcher retrieves information pertaining to the chain start event
 // of the beacon chain for usage across various services.
@@ -93,18 +89,18 @@ type Chain interface {
 // Client defines a struct that combines all relevant ETH1.0 mainchain interactions required
 // by the beacon chain node.
 type Client interface {
-	Reader
-	RPCBlockFetcher
+	RPCDataFetcher
 	bind.ContractFilterer
 	bind.ContractCaller
 }
 
-// RPCBlockFetcher defines a subset of methods conformed to by ETH1.0 RPC clients for
-// fetching block information.
-type RPCBlockFetcher interface {
+// RPCDataFetcher defines a subset of methods conformed to by ETH1.0 RPC clients for
+// fetching eth1 data from the clients.
+type RPCDataFetcher interface {
 	HeaderByNumber(ctx context.Context, number *big.Int) (*gethTypes.Header, error)
 	BlockByNumber(ctx context.Context, number *big.Int) (*gethTypes.Block, error)
 	BlockByHash(ctx context.Context, hash common.Hash) (*gethTypes.Block, error)
+	SyncProgress(ctx context.Context) (*ethereum.SyncProgress, error)
 }
 
 // RPCClient defines the rpc methods required to interact with the eth1 node.
@@ -119,18 +115,19 @@ type RPCClient interface {
 // Validator Registration Contract on the ETH1.0 chain to kick off the beacon
 // chain's validator registration process.
 type Service struct {
+	requestingOldLogs       bool
+	connectedETH1           bool
+	isRunning               bool
+	depositContractAddress  common.Address
+	processingLock          sync.RWMutex
 	ctx                     context.Context
 	cancel                  context.CancelFunc
-	client                  Client
 	headerChan              chan *gethTypes.Header
-	eth1Endpoint            string
+	headTicker              *time.Ticker
 	httpEndpoint            string
-	depositContractAddress  common.Address
 	stateNotifier           statefeed.Notifier
-	reader                  Reader
-	logger                  bind.ContractFilterer
 	httpLogger              bind.ContractFilterer
-	blockFetcher            RPCBlockFetcher
+	eth1DataFetcher         RPCDataFetcher
 	rpcClient               RPCClient
 	blockCache              *blockCache // cache to store block hash/block height.
 	latestEth1Data          *protodb.LatestETH1Data
@@ -141,17 +138,12 @@ type Service struct {
 	beaconDB                db.HeadAccessDatabase // Circular dep if using HeadFetcher.
 	depositCache            *depositcache.DepositCache
 	lastReceivedMerkleIndex int64 // Keeps track of the last received index to prevent log spam.
-	isRunning               bool
 	runError                error
 	preGenesisState         *stateTrie.BeaconState
-	processingLock          sync.RWMutex
-	requestingOldLogs       bool
-	connectedETH1           bool
 }
 
 // Web3ServiceConfig defines a config struct for web3 service to use through its life cycle.
 type Web3ServiceConfig struct {
-	ETH1Endpoint    string
 	HTTPEndPoint    string
 	DepositContract common.Address
 	BeaconDB        db.HeadAccessDatabase
@@ -162,13 +154,8 @@ type Web3ServiceConfig struct {
 // NewService sets up a new instance with an ethclient when
 // given a web3 endpoint as a string in the config.
 func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error) {
-	if !strings.HasPrefix(config.ETH1Endpoint, "ws") && !strings.HasPrefix(config.ETH1Endpoint, "ipc") {
-		return nil, fmt.Errorf(
-			"powchain service requires either an IPC or WebSocket endpoint, provided %s",
-			config.ETH1Endpoint,
-		)
-	}
 	ctx, cancel := context.WithCancel(ctx)
+	_ = cancel // govet fix for lost cancel. Cancel is handled in service.Stop()
 	depositTrie, err := trieutil.NewTrie(int(params.BeaconConfig().DepositContractTreeDepth))
 	if err != nil {
 		cancel()
@@ -183,7 +170,6 @@ func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error
 		ctx:          ctx,
 		cancel:       cancel,
 		headerChan:   make(chan *gethTypes.Header),
-		eth1Endpoint: config.ETH1Endpoint,
 		httpEndpoint: config.HTTPEndPoint,
 		latestEth1Data: &protodb.LatestETH1Data{
 			BlockHeight:        0,
@@ -203,6 +189,7 @@ func NewService(ctx context.Context, config *Web3ServiceConfig) (*Service, error
 		depositCache:            config.DepositCache,
 		lastReceivedMerkleIndex: -1,
 		preGenesisState:         genState,
+		headTicker:              time.NewTicker(time.Duration(params.BeaconConfig().SecondsPerETH1Block) * time.Second),
 	}
 
 	eth1Data, err := config.BeaconDB.PowchainData(ctx)
@@ -309,11 +296,6 @@ func (s *Service) LatestBlockHash() common.Hash {
 	return bytesutil.ToBytes32(s.latestEth1Data.BlockHash)
 }
 
-// Client for interacting with the ETH1.0 chain.
-func (s *Service) Client() Client {
-	return s.client
-}
-
 // AreAllDepositsProcessed determines if all the logs from the deposit contract
 // are processed.
 func (s *Service) AreAllDepositsProcessed() (bool, error) {
@@ -331,8 +313,34 @@ func (s *Service) AreAllDepositsProcessed() (bool, error) {
 	return true, nil
 }
 
+// refers to the latest eth1 block which follows the condition: eth1_timestamp +
+// SECONDS_PER_ETH1_BLOCK * ETH1_FOLLOW_DISTANCE <= current_unix_time
+func (s *Service) followBlockHeight(ctx context.Context) (uint64, error) {
+	latestValidBlock := uint64(0)
+	if s.latestEth1Data.BlockHeight > params.BeaconConfig().Eth1FollowDistance {
+		latestValidBlock = s.latestEth1Data.BlockHeight - params.BeaconConfig().Eth1FollowDistance
+	}
+	blockTime, err := s.BlockTimeByHeight(ctx, big.NewInt(int64(latestValidBlock)))
+	if err != nil {
+		return 0, err
+	}
+	followTime := func(t uint64) uint64 {
+		return t + params.BeaconConfig().Eth1FollowDistance*params.BeaconConfig().SecondsPerETH1Block
+	}
+	for followTime(blockTime) > s.latestEth1Data.BlockTime && latestValidBlock > 0 {
+		// reduce block height to get eth1 block which
+		// fulfills stated condition
+		latestValidBlock--
+		blockTime, err = s.BlockTimeByHeight(ctx, big.NewInt(int64(latestValidBlock)))
+		if err != nil {
+			return 0, err
+		}
+	}
+	return latestValidBlock, nil
+}
+
 func (s *Service) connectToPowChain() error {
-	powClient, httpClient, rpcClient, err := s.dialETH1Nodes()
+	httpClient, rpcClient, err := s.dialETH1Nodes()
 	if err != nil {
 		return errors.Wrap(err, "could not dial eth1 nodes")
 	}
@@ -342,69 +350,106 @@ func (s *Service) connectToPowChain() error {
 		return errors.Wrap(err, "could not create deposit contract caller")
 	}
 
-	s.initializeConnection(powClient, httpClient, rpcClient, depositContractCaller)
+	s.initializeConnection(httpClient, rpcClient, depositContractCaller)
 	return nil
 }
 
-func (s *Service) dialETH1Nodes() (*ethclient.Client, *ethclient.Client, *gethRPC.Client, error) {
+func (s *Service) dialETH1Nodes() (*ethclient.Client, *gethRPC.Client, error) {
 	httpRPCClient, err := gethRPC.Dial(s.httpEndpoint)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	httpClient := ethclient.NewClient(httpRPCClient)
 
-	rpcClient, err := gethRPC.Dial(s.eth1Endpoint)
-	if err != nil {
-		httpClient.Close()
-		return nil, nil, nil, err
+	// Make a simple call to ensure we are actually connected to a working node.
+	if _, err := httpClient.ChainID(s.ctx); err != nil {
+		return nil, nil, err
 	}
-	powClient := ethclient.NewClient(rpcClient)
 
-	return powClient, httpClient, httpRPCClient, nil
+	return httpClient, httpRPCClient, nil
 }
 
-func (s *Service) initializeConnection(powClient *ethclient.Client,
-	httpClient *ethclient.Client, rpcClient *gethRPC.Client, contractCaller *contracts.DepositContractCaller) {
-
-	s.reader = powClient
-	s.logger = powClient
-	s.client = httpClient
+func (s *Service) initializeConnection(
+	httpClient *ethclient.Client,
+	rpcClient *gethRPC.Client,
+	contractCaller *contracts.DepositContractCaller,
+) {
 	s.httpLogger = httpClient
-	s.blockFetcher = httpClient
+	s.eth1DataFetcher = httpClient
 	s.depositContractCaller = contractCaller
 	s.rpcClient = rpcClient
 }
 
 func (s *Service) waitForConnection() {
-	err := s.connectToPowChain()
-	if err == nil {
-		s.connectedETH1 = true
-		log.WithFields(logrus.Fields{
-			"endpoint": s.eth1Endpoint,
-		}).Info("Connected to eth1 proof-of-work chain")
-		return
+	errConnect := s.connectToPowChain()
+	if errConnect == nil {
+		synced, errSynced := s.isEth1NodeSynced()
+		// Resume if eth1 node is synced.
+		if synced {
+			s.connectedETH1 = true
+			log.WithFields(logrus.Fields{
+				"endpoint": s.httpEndpoint,
+			}).Info("Connected to eth1 proof-of-work chain")
+			return
+		}
+		if errSynced != nil {
+			log.WithError(errSynced).Error("Could not check sync status of eth1 chain")
+		}
 	}
-	log.WithError(err).Error("Could not connect to powchain endpoint")
+	if errConnect != nil {
+		log.WithError(errConnect).Error("Could not connect to powchain endpoint")
+	}
 	ticker := time.NewTicker(backOffPeriod)
 	for {
 		select {
 		case <-ticker.C:
-			err := s.connectToPowChain()
-			if err == nil {
+			errConnect := s.connectToPowChain()
+			if errConnect != nil {
+				log.WithError(errConnect).Error("Could not connect to powchain endpoint")
+				continue
+			}
+			synced, errSynced := s.isEth1NodeSynced()
+			if errSynced != nil {
+				log.WithError(errSynced).Error("Could not check sync status of eth1 chain")
+				continue
+			}
+			if synced {
 				s.connectedETH1 = true
 				log.WithFields(logrus.Fields{
-					"endpoint": s.eth1Endpoint,
+					"endpoint": s.httpEndpoint,
 				}).Info("Connected to eth1 proof-of-work chain")
 				ticker.Stop()
 				return
 			}
-			log.WithError(err).Error("Could not connect to powchain endpoint")
+			log.Debug("Eth1 node is currently syncing")
 		case <-s.ctx.Done():
 			ticker.Stop()
 			log.Debug("Received cancelled context,closing existing powchain service")
 			return
 		}
 	}
+}
+
+// checks if the eth1 node is healthy and ready to serve before
+// fetching data from  it.
+func (s *Service) isEth1NodeSynced() (bool, error) {
+	syncProg, err := s.eth1DataFetcher.SyncProgress(s.ctx)
+	if err != nil {
+		return false, err
+	}
+	return syncProg == nil, nil
+}
+
+// Reconnect to eth1 node in case of any failure.
+func (s *Service) retryETH1Node(err error) {
+	s.runError = err
+	s.connectedETH1 = false
+	// Back off for a while before
+	// resuming dialing the eth1 node.
+	time.Sleep(backOffPeriod)
+	s.waitForConnection()
+	// Reset run error in the event of a successful connection.
+	s.runError = nil
 }
 
 // initDataFromContract calls the deposit contract and finds the deposit count
@@ -438,7 +483,7 @@ func (s *Service) initDepositCaches(ctx context.Context, ctrs []*protodb.Deposit
 
 	// Only add pending deposits if the container slice length
 	// is more than the current index in state.
-	if len(ctrs) > int(currIndex) {
+	if uint64(len(ctrs)) > currIndex {
 		for _, c := range ctrs[currIndex:] {
 			s.depositCache.InsertPendingDeposit(ctx, c.Deposit, c.Eth1BlockHeight, c.Index, bytesutil.ToBytes32(c.DepositRoot))
 		}
@@ -446,9 +491,9 @@ func (s *Service) initDepositCaches(ctx context.Context, ctrs []*protodb.Deposit
 	return nil
 }
 
-// processSubscribedHeaders adds a newly observed eth1 block to the block cache and
+// processBlockHeader adds a newly observed eth1 block to the block cache and
 // updates the latest blockHeight, blockHash, and blockTime properties of the service.
-func (s *Service) processSubscribedHeaders(header *gethTypes.Header) {
+func (s *Service) processBlockHeader(header *gethTypes.Header) {
 	defer safelyHandlePanic()
 	blockNumberGauge.Set(float64(header.Number.Int64()))
 	s.latestEth1Data.BlockHeight = header.Number.Uint64()
@@ -498,7 +543,9 @@ func (s *Service) batchRequestHeaders(startBlock uint64, endBlock uint64) ([]*ge
 	}
 	for _, h := range headers {
 		if h != nil {
-			s.blockCache.AddBlock(gethTypes.NewBlockWithHeader(h))
+			if err := s.blockCache.AddBlock(gethTypes.NewBlockWithHeader(h)); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return headers, nil
@@ -516,12 +563,12 @@ func safelyHandlePanic() {
 	}
 }
 
-func (s *Service) handleDelayTicker() {
+func (s *Service) handleETH1FollowDistance() {
 	defer safelyHandlePanic()
 
 	// use a 5 minutes timeout for block time, because the max mining time is 278 sec (block 7208027)
 	// (analyzed the time of the block from 2018-09-01 to 2019-02-13)
-	fiveMinutesTimeout := time.Now().Add(-5 * time.Minute)
+	fiveMinutesTimeout := roughtime.Now().Add(-5 * time.Minute)
 	// check that web3 client is syncing
 	if time.Unix(int64(s.latestEth1Data.BlockTime), 0).Before(fiveMinutesTimeout) {
 		log.Warn("eth1 client is not syncing")
@@ -550,41 +597,48 @@ func (s *Service) handleDelayTicker() {
 	}
 }
 
+func (s *Service) initPOWService() {
+
+	// Run in a select loop to retry in the event of any failures.
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+			err := s.initDataFromContract()
+			if err != nil {
+				log.Errorf("Unable to retrieve data from deposit contract %v", err)
+				s.retryETH1Node(err)
+				continue
+			}
+
+			header, err := s.eth1DataFetcher.HeaderByNumber(context.Background(), nil)
+			if err != nil {
+				log.Errorf("Unable to retrieve latest ETH1.0 chain header: %v", err)
+				s.retryETH1Node(err)
+				continue
+			}
+
+			s.latestEth1Data.BlockHeight = header.Number.Uint64()
+			s.latestEth1Data.BlockHash = header.Hash().Bytes()
+			s.latestEth1Data.BlockTime = header.Time
+
+			if err := s.processPastLogs(context.Background()); err != nil {
+				log.Errorf("Unable to process past logs %v", err)
+				s.retryETH1Node(err)
+				continue
+			}
+			return
+		}
+	}
+}
+
 // run subscribes to all the services for the ETH1.0 chain.
 func (s *Service) run(done <-chan struct{}) {
 	s.isRunning = true
 	s.runError = nil
-	if err := s.initDataFromContract(); err != nil {
-		log.Errorf("Unable to retrieve data from deposit contract %v", err)
-		return
-	}
 
-	headSub, err := s.reader.SubscribeNewHead(s.ctx, s.headerChan)
-	if err != nil {
-		log.Errorf("Unable to subscribe to incoming ETH1.0 chain headers: %v", err)
-		s.runError = err
-		return
-	}
-
-	header, err := s.blockFetcher.HeaderByNumber(context.Background(), nil)
-	if err != nil {
-		log.Errorf("Unable to retrieve latest ETH1.0 chain header: %v", err)
-		s.runError = err
-		return
-	}
-
-	s.latestEth1Data.BlockHeight = header.Number.Uint64()
-	s.latestEth1Data.BlockHash = header.Hash().Bytes()
-
-	if err := s.processPastLogs(context.Background()); err != nil {
-		log.Errorf("Unable to process past logs %v", err)
-		s.runError = err
-		return
-	}
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer headSub.Unsubscribe()
-	defer ticker.Stop()
+	s.initPOWService()
 
 	for {
 		select {
@@ -594,23 +648,15 @@ func (s *Service) run(done <-chan struct{}) {
 			s.connectedETH1 = false
 			log.Debug("Context closed, exiting goroutine")
 			return
-		case s.runError = <-headSub.Err():
-			log.WithError(s.runError).Warn("Subscription to new head notifier failed")
-			s.connectedETH1 = false
-			s.waitForConnection()
-			headSub, err = s.reader.SubscribeNewHead(s.ctx, s.headerChan)
+		case <-s.headTicker.C:
+			head, err := s.eth1DataFetcher.HeaderByNumber(s.ctx, nil)
 			if err != nil {
-				log.WithError(err).Error("Unable to re-subscribe to incoming ETH1.0 chain headers")
-				s.runError = err
-				return
+				log.WithError(err).Debug("Could not fetch latest eth1 header")
+				s.retryETH1Node(err)
+				continue
 			}
-			s.runError = nil
-		case header, ok := <-s.headerChan:
-			if ok {
-				s.processSubscribedHeaders(header)
-			}
-		case <-ticker.C:
-			s.handleDelayTicker()
+			s.processBlockHeader(head)
+			s.handleETH1FollowDistance()
 		}
 	}
 }

@@ -1,3 +1,6 @@
+// Package iface defines an interface for the slasher database,
+// providing more advanced interfaces such as a
+// ReadOnlyDatabase.
 package iface
 
 import (
@@ -5,8 +8,8 @@ import (
 	"io"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	slashpb "github.com/prysmaticlabs/prysm/proto/slashing"
 	"github.com/prysmaticlabs/prysm/slasher/db/types"
+	detectionTypes "github.com/prysmaticlabs/prysm/slasher/detection/attestations/types"
 )
 
 // ReadOnlyDatabase represents a read only database with functions that do not modify the DB.
@@ -21,17 +24,17 @@ type ReadOnlyDatabase interface {
 	BlockHeaders(ctx context.Context, epoch uint64, validatorID uint64) ([]*ethpb.SignedBeaconBlockHeader, error)
 	HasBlockHeader(ctx context.Context, epoch uint64, validatorID uint64) bool
 
-	// IndexedAttestationsForEpoch related methods.
-	IndexedAttestationsForEpoch(ctx context.Context, targetEpoch uint64) ([]*ethpb.IndexedAttestation, error)
-	IdxAttsForTargetFromID(ctx context.Context, targetEpoch uint64, validatorID uint64) ([]*ethpb.IndexedAttestation, error)
-	IdxAttsForTarget(ctx context.Context, targetEpoch uint64) ([]*ethpb.IndexedAttestation, error)
+	// IndexedAttestations related methods.
+	HasIndexedAttestation(ctx context.Context, att *ethpb.IndexedAttestation) (bool, error)
+	IndexedAttestationsForTarget(ctx context.Context, targetEpoch uint64) ([]*ethpb.IndexedAttestation, error)
+	IndexedAttestationsWithPrefix(ctx context.Context, targetEpoch uint64, sigBytes []byte) ([]*ethpb.IndexedAttestation, error)
 	LatestIndexedAttestationsTargetEpoch(ctx context.Context) (uint64, error)
-	LatestValidatorIdx(ctx context.Context) (uint64, error)
-	DoubleVotes(ctx context.Context, validatorIdx uint64, dataRoot []byte, origAtt *ethpb.IndexedAttestation) ([]*ethpb.AttesterSlashing, error)
-	HasIndexedAttestation(ctx context.Context, targetEpoch uint64, validatorID uint64) (bool, error)
 
 	// MinMaxSpan related methods.
-	ValidatorSpansMap(ctx context.Context, validatorIdx uint64) (*slashpb.EpochSpanMap, error)
+	EpochSpans(ctx context.Context, epoch uint64, fromCache bool) (*detectionTypes.EpochStore, error)
+	EpochSpansMap(ctx context.Context, epoch uint64) (map[uint64]detectionTypes.Span, bool, error)
+	EpochSpanByValidatorIndex(ctx context.Context, validatorIdx uint64, epoch uint64) (detectionTypes.Span, error)
+	EpochsSpanByValidatorsIndices(ctx context.Context, validatorIndices []uint64, maxEpoch uint64) (map[uint64]map[uint64]detectionTypes.Span, error)
 
 	// ProposerSlashing related methods.
 	ProposalSlashingsByStatus(ctx context.Context, status types.SlashingStatus) ([]*ethpb.ProposerSlashing, error)
@@ -42,6 +45,9 @@ type ReadOnlyDatabase interface {
 
 	// Chain data related methods.
 	ChainHead(ctx context.Context) (*ethpb.ChainHead, error)
+
+	// Cache management methods.
+	RemoveOldestFromCache(ctx context.Context) uint64
 }
 
 // WriteAccessDatabase represents a write access database with only functions that can modify the DB.
@@ -52,21 +58,24 @@ type WriteAccessDatabase interface {
 	SetLatestEpochDetected(ctx context.Context, epoch uint64) error
 
 	// BlockHeader related methods.
-	SaveBlockHeader(ctx context.Context, epoch uint64, validatorID uint64, blockHeader *ethpb.SignedBeaconBlockHeader) error
-	DeleteBlockHeader(ctx context.Context, epoch uint64, validatorID uint64, blockHeader *ethpb.SignedBeaconBlockHeader) error
+	SaveBlockHeader(ctx context.Context, blockHeader *ethpb.SignedBeaconBlockHeader) error
+	DeleteBlockHeader(ctx context.Context, blockHeader *ethpb.SignedBeaconBlockHeader) error
 	PruneBlockHistory(ctx context.Context, currentEpoch uint64, pruningEpochAge uint64) error
 
-	// IndexedAttestationsForEpoch related methods.
+	// IndexedAttestations related methods.
 	SaveIndexedAttestation(ctx context.Context, idxAttestation *ethpb.IndexedAttestation) error
-	SaveIncomingIndexedAttestationByEpoch(ctx context.Context, idxAttestation *ethpb.IndexedAttestation) error
-	SaveIncomingIndexedAttestationsByEpoch(ctx context.Context, idxAttestations []*ethpb.IndexedAttestation) error
+	SaveIndexedAttestations(ctx context.Context, idxAttestations []*ethpb.IndexedAttestation) error
 	DeleteIndexedAttestation(ctx context.Context, idxAttestation *ethpb.IndexedAttestation) error
 	PruneAttHistory(ctx context.Context, currentEpoch uint64, pruningEpochAge uint64) error
 
 	// MinMaxSpan related methods.
-	SaveValidatorSpansMap(ctx context.Context, validatorIdx uint64, spanMap *slashpb.EpochSpanMap) error
+	SaveEpochSpans(ctx context.Context, epoch uint64, spans *detectionTypes.EpochStore, toCache bool) error
+	SaveEpochSpansMap(ctx context.Context, epoch uint64, spanMap map[uint64]detectionTypes.Span) error
+	SaveValidatorEpochSpan(ctx context.Context, validatorIdx uint64, epoch uint64, spans detectionTypes.Span) error
 	SaveCachedSpansMaps(ctx context.Context) error
-	DeleteValidatorSpanMap(ctx context.Context, validatorIdx uint64) error
+	SaveEpochsSpanByValidatorsIndices(ctx context.Context, epochsSpans map[uint64]map[uint64]detectionTypes.Span) error
+	DeleteEpochSpans(ctx context.Context, validatorIdx uint64) error
+	DeleteValidatorSpanByEpoch(ctx context.Context, validatorIdx uint64, epoch uint64) error
 
 	// ProposerSlashing related methods.
 	DeleteProposerSlashing(ctx context.Context, slashing *ethpb.ProposerSlashing) error
@@ -91,7 +100,12 @@ type FullAccessDatabase interface {
 type Database interface {
 	io.Closer
 	FullAccessDatabase
-
 	DatabasePath() string
 	ClearDB() error
+}
+
+// EpochSpansStore represents a data access layer for marshaling and unmarshaling validator spans for each validator per epoch.
+type EpochSpansStore interface {
+	SetValidatorSpan(ctx context.Context, idx uint64, newSpan detectionTypes.Span) error
+	GetValidatorSpan(ctx context.Context, idx uint64) (detectionTypes.Span, error)
 }

@@ -7,7 +7,6 @@ import (
 	"path"
 	"time"
 
-	"github.com/boltdb/bolt"
 	"github.com/gogo/protobuf/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -15,6 +14,8 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/keystore"
+	"github.com/prysmaticlabs/prysm/shared/params"
+	bolt "go.etcd.io/bbolt"
 )
 
 var (
@@ -26,8 +27,8 @@ var (
 		Name: "assigned_pk_count",
 		Help: "The number of private keys currently assigned to alive pods",
 	})
-	blacklistedPKCount = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "blacklisted_pk_count",
+	bannedPKCount = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "banned_pk_count",
 		Help: "The number of private keys which have been removed that are of exited validators",
 	})
 )
@@ -52,7 +53,7 @@ type db struct {
 
 func newDB(dbPath string) *db {
 	datafile := path.Join(dbPath, dbFileName)
-	boltdb, err := bolt.Open(datafile, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	boltdb, err := bolt.Open(datafile, params.BeaconIoConfig().ReadWritePermissions, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
 		panic(err)
 	}
@@ -71,8 +72,8 @@ func newDB(dbPath string) *db {
 
 	// Populate metrics on start.
 	if err := boltdb.View(func(tx *bolt.Tx) error {
-		// Populate blacklisted key count.
-		blacklistedPKCount.Set(float64(tx.Bucket(deletedKeysBucket).Stats().KeyN))
+		// Populate banned key count.
+		bannedPKCount.Set(float64(tx.Bucket(deletedKeysBucket).Stats().KeyN))
 
 		keys := 0
 
@@ -125,7 +126,7 @@ func (d *db) DeleteUnallocatedKey(_ context.Context, privateKey []byte) error {
 		if err := tx.Bucket(deletedKeysBucket).Put(privateKey, dummyVal); err != nil {
 			return err
 		}
-		blacklistedPKCount.Inc()
+		bannedPKCount.Inc()
 		allocatedPkCount.Dec()
 		return nil
 	})
@@ -335,7 +336,7 @@ func (d *db) RemovePKFromPod(podName string, key []byte) error {
 		if err != nil {
 			return err
 		}
-		blacklistedPKCount.Inc()
+		bannedPKCount.Inc()
 		allocatedPkCount.Dec()
 		assignedPkCount.Dec()
 		nowBytes, err := time.Now().MarshalBinary()

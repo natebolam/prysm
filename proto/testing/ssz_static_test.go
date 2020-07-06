@@ -7,6 +7,7 @@ import (
 	"path"
 	"testing"
 
+	fssz "github.com/ferranbt/fastssz"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
@@ -22,7 +23,7 @@ type SSZRoots struct {
 }
 
 func runSSZStaticTests(t *testing.T, config string) {
-	if err := spectest.SetConfig(config); err != nil {
+	if err := spectest.SetConfig(t, config); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,8 +131,13 @@ func UnmarshalledSSZ(t *testing.T, serializedBytes []byte, folderName string) (i
 		return nil, nil
 	case "Eth1Data":
 		obj = &ethpb.Eth1Data{}
+	case "Eth1Block":
+		t.Skip("Unused type")
+		return nil, nil
 	case "Fork":
 		obj = &pb.Fork{}
+	case "ForkData":
+		obj = &pb.ForkData{}
 	case "HistoricalBatch":
 		obj = &pb.HistoricalBatch{}
 	case "IndexedAttestation":
@@ -140,12 +146,16 @@ func UnmarshalledSSZ(t *testing.T, serializedBytes []byte, folderName string) (i
 		obj = &pb.PendingAttestation{}
 	case "ProposerSlashing":
 		obj = &ethpb.ProposerSlashing{}
+	case "SignedAggregateAndProof":
+		obj = &pb.SignedAggregateAndProof{}
 	case "SignedBeaconBlock":
 		obj = &ethpb.SignedBeaconBlock{}
 	case "SignedBeaconBlockHeader":
 		obj = &ethpb.SignedBeaconBlockHeader{}
 	case "SignedVoluntaryExit":
 		obj = &ethpb.SignedVoluntaryExit{}
+	case "SigningData":
+		obj = &pb.SigningData{}
 	case "Validator":
 		obj = &ethpb.Validator{}
 	case "VoluntaryExit":
@@ -153,6 +163,11 @@ func UnmarshalledSSZ(t *testing.T, serializedBytes []byte, folderName string) (i
 	default:
 		return nil, errors.New("type not found")
 	}
-	err := ssz.Unmarshal(serializedBytes, obj)
+	var err error
+	if o, ok := obj.(fssz.Unmarshaler); ok {
+		err = o.UnmarshalSSZ(serializedBytes)
+	} else {
+		err = ssz.Unmarshal(serializedBytes, obj)
+	}
 	return obj, err
 }

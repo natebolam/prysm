@@ -12,65 +12,31 @@ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 // attestation or proposal they are going to submit to the network are not going to
 // produce a slashable event.
 service Slasher {
-    // Gets AttesterSlashing container if the attestation that
-    // was received produces a slashable event.
+    // Returns any found attester slashings if the passed in attestation conflicts with a validators history.
     rpc IsSlashableAttestation(ethereum.eth.v1alpha1.IndexedAttestation) returns (AttesterSlashingResponse);
 
-    // Gets ProposerSlashing container if the block header that
-    // was received produces a slashable event.
-    rpc IsSlashableBlock(ProposerSlashingRequest) returns (ProposerSlashingResponse);
+    // Returns any found proposer slashings if the passed in proposal conflicts with a validators history.
+    rpc IsSlashableBlock(ethereum.eth.v1alpha1.SignedBeaconBlockHeader) returns (ProposerSlashingResponse);
 
-    // Gets ProposerSlashingResponse container if slashing with the requested status are found in the db.
-    rpc ProposerSlashings(SlashingStatusRequest) returns (ProposerSlashingResponse);
+    // Returns if a given indexed attestation could be slashable when compared to the slashers history for the attesters.
+    // This function is read-only, and does not need the indexed attestation to be signed.
+    rpc IsSlashableAttestationNoUpdate(ethereum.eth.v1alpha1.IndexedAttestation) returns (Slashable);
 
-    // Gets AttesterSlashingResponse container if slashing with the requested status are found in the db.
-    rpc AttesterSlashings(SlashingStatusRequest) returns (AttesterSlashingResponse);
-}
-
-// CompressedIdxAtt is an indexed attestation with the []byte data root
-// in place of its AttestationData.
-message CompressedIdxAtt {
-    repeated uint64 indices = 1 ;
-    bytes data_root = 2;
-    // 96 bytes aggregate signature.
-    bytes signature = 3;
-}
-
-// CompressedIdxAttList is a list of CompressedIdxAtts used for
-// accessing an array from the DB.
-message CompressedIdxAttList {
-    repeated CompressedIdxAtt list = 1;
-}
-
-message ProposerSlashingRequest {
-    ethereum.eth.v1alpha1.SignedBeaconBlockHeader block_header = 1;
-    uint64 validator_index = 2;
+    // Returns if a given beacon block header could be slashable when compared to the slashers history for the proposer.
+    // This function is read-only, and does not need the beacon block header to be signed.
+    rpc IsSlashableBlockNoUpdate(ethereum.eth.v1alpha1.BeaconBlockHeader) returns (Slashable);
 }
 
 message ProposerSlashingResponse {
     repeated ethereum.eth.v1alpha1.ProposerSlashing proposer_slashing = 1;
 }
 
+message Slashable {
+    bool slashable = 1;
+}
+
 message AttesterSlashingResponse {
     repeated ethereum.eth.v1alpha1.AttesterSlashing attester_slashing = 1;
-}
-
-// In order to detect surrounded attestation we need to compare
-// each attestation source to those spans
-// see https://github.com/protolambda/eth2-surround/blob/master/README.md#min-max-surround
-// for further details.
-message MinMaxEpochSpan {
-    uint32 min_epoch_span = 1;
-    uint32 max_epoch_span = 2;
-}
-
-// Every validator will have their own spans map containing min distance from each epoch
-// to the closest target epoch of another attestation (surrounded) and max distance to
-// a target attestation (surrounding), in order to detect slashable attestation as quickly
-// as possible.
-message EpochSpanMap {
-    // uint64 is for storing the epoch
-    map<uint64, MinMaxEpochSpan> epoch_span_map = 1;
 }
 
 // ProposalHistory defines the structure for recording a validator's historical proposals.
@@ -90,18 +56,4 @@ message ProposalHistory {
 message AttestationHistory {
     map<uint64, uint64> target_to_source = 1;
     uint64 latest_epoch_written = 2;
-}
-
-message SlashingStatusRequest {
-    enum SlashingStatus {
-        // Unknown default status in case it is not set
-        Unknown = 0;
-        // Active slashing proof hasn't been included yet.
-        Active = 1;
-        // Included slashing proof that has been included in a block.
-        Included = 2;
-        // Reverted slashing proof that has been reverted and therefore is relevant again.
-        Reverted = 3;
-    }
-    SlashingStatus status = 1;
 }

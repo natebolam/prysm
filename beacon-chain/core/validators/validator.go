@@ -5,6 +5,8 @@
 package validators
 
 import (
+	"fmt"
+
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
@@ -38,6 +40,9 @@ import (
 //    validator.withdrawable_epoch = Epoch(validator.exit_epoch + MIN_VALIDATOR_WITHDRAWABILITY_DELAY)
 func InitiateValidatorExit(state *stateTrie.BeaconState, idx uint64) (*stateTrie.BeaconState, error) {
 	vals := state.Validators()
+	if idx >= uint64(len(vals)) {
+		return nil, fmt.Errorf("validator idx %d is higher then validator count %d", idx, len(vals))
+	}
 	validator := vals[idx]
 	if validator.ExitEpoch != params.BeaconConfig().FarFutureEpoch {
 		return state, nil
@@ -48,7 +53,7 @@ func InitiateValidatorExit(state *stateTrie.BeaconState, idx uint64) (*stateTrie
 			exitEpochs = append(exitEpochs, val.ExitEpoch)
 		}
 	}
-	exitEpochs = append(exitEpochs, helpers.DelayedActivationExitEpoch(helpers.CurrentEpoch(state)))
+	exitEpochs = append(exitEpochs, helpers.ActivationExitEpoch(helpers.CurrentEpoch(state)))
 
 	// Obtain the exit queue epoch as the maximum number in the exit epochs array.
 	exitQueueEpoch := uint64(0)
@@ -106,11 +111,12 @@ func InitiateValidatorExit(state *stateTrie.BeaconState, idx uint64) (*stateTrie
 //    # Apply proposer and whistleblower rewards
 //    proposer_index = get_beacon_proposer_index(state)
 //    if whistleblower_index is None:
+//        whistleblower_index = proposer_index
 //    whistleblower_reward = Gwei(validator.effective_balance // WHISTLEBLOWER_REWARD_QUOTIENT)
 //    proposer_reward = Gwei(whistleblower_reward // PROPOSER_REWARD_QUOTIENT)
 //    increase_balance(state, proposer_index, proposer_reward)
-//    increase_balance(state, whistleblower_index, whistleblower_reward - proposer_reward)
-func SlashValidator(state *stateTrie.BeaconState, slashedIdx uint64, whistleBlowerIdx uint64) (*stateTrie.BeaconState, error) {
+//    increase_balance(state, whistleblower_index, Gwei(whistleblower_reward - proposer_reward))
+func SlashValidator(state *stateTrie.BeaconState, slashedIdx uint64) (*stateTrie.BeaconState, error) {
 	state, err := InitiateValidatorExit(state, slashedIdx)
 	if err != nil {
 		return nil, errors.Wrapf(err, "could not initiate validator %d exit", slashedIdx)
@@ -128,6 +134,7 @@ func SlashValidator(state *stateTrie.BeaconState, slashedIdx uint64, whistleBlow
 		return nil, err
 	}
 
+	// The slashing amount is represented by epochs per slashing vector. The validator's effective balance is then applied to that amount.
 	slashings := state.Slashings()
 	currentSlashing := slashings[currentEpoch%params.BeaconConfig().EpochsPerSlashingsVector]
 	if err := state.UpdateSlashingsAtIndex(
@@ -144,10 +151,8 @@ func SlashValidator(state *stateTrie.BeaconState, slashedIdx uint64, whistleBlow
 	if err != nil {
 		return nil, errors.Wrap(err, "could not get proposer idx")
 	}
-
-	if whistleBlowerIdx == 0 {
-		whistleBlowerIdx = proposerIdx
-	}
+	// In phase 0, the proposer is the whistleblower.
+	whistleBlowerIdx := proposerIdx
 	whistleblowerReward := validator.EffectiveBalance / params.BeaconConfig().WhistleBlowerRewardQuotient
 	proposerReward := whistleblowerReward / params.BeaconConfig().ProposerRewardQuotient
 	err = helpers.IncreaseBalance(state, proposerIdx, proposerReward)
@@ -161,20 +166,19 @@ func SlashValidator(state *stateTrie.BeaconState, slashedIdx uint64, whistleBlow
 	return state, nil
 }
 
-// ActivatedValidatorIndices determines the indices activated during the current epoch.
+// ActivatedValidatorIndices determines the indices activated during the given epoch.
 func ActivatedValidatorIndices(epoch uint64, validators []*ethpb.Validator) []uint64 {
 	activations := make([]uint64, 0)
-	delayedActivationEpoch := helpers.DelayedActivationExitEpoch(epoch)
 	for i := 0; i < len(validators); i++ {
 		val := validators[i]
-		if val.ActivationEpoch == delayedActivationEpoch {
+		if val.ActivationEpoch <= epoch && epoch < val.ExitEpoch {
 			activations = append(activations, uint64(i))
 		}
 	}
 	return activations
 }
 
-// SlashedValidatorIndices determines the indices slashed during the current epoch.
+// SlashedValidatorIndices determines the indices slashed during the given epoch.
 func SlashedValidatorIndices(epoch uint64, validators []*ethpb.Validator) []uint64 {
 	slashed := make([]uint64, 0)
 	for i := 0; i < len(validators); i++ {
@@ -220,9 +224,51 @@ func ExitedValidatorIndices(epoch uint64, validators []*ethpb.Validator, activeV
 	}
 	withdrawableEpoch := exitQueueEpoch + params.BeaconConfig().MinValidatorWithdrawabilityDelay
 	for i, val := range validators {
-		if val.ExitEpoch == epoch && val.WithdrawableEpoch == withdrawableEpoch {
+		if val.ExitEpoch == epoch && val.WithdrawableEpoch == withdrawableEpoch &&
+			val.EffectiveBalance > params.BeaconConfig().EjectionBalance {
 			exited = append(exited, uint64(i))
 		}
 	}
 	return exited, nil
+}
+
+// EjectedValidatorIndices determines the indices ejected during the given epoch.
+func EjectedValidatorIndices(epoch uint64, validators []*ethpb.Validator, activeValidatorCount uint64) ([]uint64, error) {
+	ejected := make([]uint64, 0)
+	exitEpochs := make([]uint64, 0)
+	for i := 0; i < len(validators); i++ {
+		val := validators[i]
+		if val.ExitEpoch != params.BeaconConfig().FarFutureEpoch {
+			exitEpochs = append(exitEpochs, val.ExitEpoch)
+		}
+	}
+	exitQueueEpoch := uint64(0)
+	for _, i := range exitEpochs {
+		if exitQueueEpoch < i {
+			exitQueueEpoch = i
+		}
+	}
+
+	// We use the exit queue churn to determine if we have passed a churn limit.
+	exitQueueChurn := 0
+	for _, val := range validators {
+		if val.ExitEpoch == exitQueueEpoch {
+			exitQueueChurn++
+		}
+	}
+	churn, err := helpers.ValidatorChurnLimit(activeValidatorCount)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not get churn limit")
+	}
+	if churn < uint64(exitQueueChurn) {
+		exitQueueEpoch++
+	}
+	withdrawableEpoch := exitQueueEpoch + params.BeaconConfig().MinValidatorWithdrawabilityDelay
+	for i, val := range validators {
+		if val.ExitEpoch == epoch && val.WithdrawableEpoch == withdrawableEpoch &&
+			val.EffectiveBalance <= params.BeaconConfig().EjectionBalance {
+			ejected = append(ejected, uint64(i))
+		}
+	}
+	return ejected, nil
 }

@@ -2,8 +2,10 @@ package kv
 
 import (
 	"bytes"
+	"context"
 
-	"github.com/boltdb/bolt"
+	bolt "go.etcd.io/bbolt"
+	"go.opencensus.io/trace"
 )
 
 // lookupValuesForIndices takes in a list of indices and looks up
@@ -13,7 +15,9 @@ import (
 // attestations and we have an index `[]byte("5")` under the shard indices bucket,
 // we might find roots `0x23` and `0x45` stored under that index. We can then
 // do a batch read for attestations corresponding to those roots.
-func lookupValuesForIndices(indicesByBucket map[string][]byte, tx *bolt.Tx) [][][]byte {
+func lookupValuesForIndices(ctx context.Context, indicesByBucket map[string][]byte, tx *bolt.Tx) [][][]byte {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB.lookupValuesForIndices")
+	defer span.End()
 	values := make([][][]byte, 0)
 	for k, v := range indicesByBucket {
 		bkt := tx.Bucket([]byte(k))
@@ -30,7 +34,9 @@ func lookupValuesForIndices(indicesByBucket map[string][]byte, tx *bolt.Tx) [][]
 // updateValueForIndices updates the value for each index by appending it to the previous
 // values stored at said index. Typically, indices are roots of data that can then
 // be used for reads or batch reads from the DB.
-func updateValueForIndices(indicesByBucket map[string][]byte, root []byte, tx *bolt.Tx) error {
+func updateValueForIndices(ctx context.Context, indicesByBucket map[string][]byte, root []byte, tx *bolt.Tx) error {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB.updateValueForIndices")
+	defer span.End()
 	for k, idx := range indicesByBucket {
 		bkt := tx.Bucket([]byte(k))
 		valuesAtIndex := bkt.Get(idx)
@@ -54,14 +60,17 @@ func updateValueForIndices(indicesByBucket map[string][]byte, root []byte, tx *b
 }
 
 // deleteValueForIndices clears a root stored at each index.
-func deleteValueForIndices(indicesByBucket map[string][]byte, root []byte, tx *bolt.Tx) error {
+func deleteValueForIndices(ctx context.Context, indicesByBucket map[string][]byte, root []byte, tx *bolt.Tx) error {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB.deleteValueForIndices")
+	defer span.End()
 	for k, idx := range indicesByBucket {
 		bkt := tx.Bucket([]byte(k))
 		valuesAtIndex := bkt.Get(idx)
 		if valuesAtIndex != nil {
 			start := bytes.Index(valuesAtIndex, root)
-			// if the root was not found inside the values at index slice, we continue.
-			if start == -1 {
+			// If the root was not found inside the values at index slice, we continue.
+			// Root must be correctly aligned to avoid matching to subsequences of adjacent values.
+			if start == -1 || start%len(root) != 0 {
 				continue
 			}
 			// We clear out the root from the values at index slice. For example,

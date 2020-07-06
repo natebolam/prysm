@@ -1,10 +1,9 @@
-// Package testutil defines the testing utils such as asserting logs.
+// Package testutil defines common unit test utils such as asserting logs.
 package testutil
 
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sirupsen/logrus/hooks/test"
 )
@@ -39,31 +38,5 @@ func assertLogs(t *testing.T, hook *test.Hook, want string, flag bool) {
 		t.Fatalf("log not found: %s", want)
 	} else if !flag && match {
 		t.Fatalf("unwanted log found: %s", want)
-	}
-}
-
-// WaitForLog waits for the desired string to appear the logs within a
-// time period. If it does not appear within the limit, the function
-// will throw an error.
-func WaitForLog(t *testing.T, hook *test.Hook, want string) {
-	t.Logf("waiting for: %s", want)
-	match := false
-	timer := time.After(1 * time.Second)
-
-	for {
-		select {
-		case <-timer:
-			t.Fatalf("log not found in time period: %s", want)
-		default:
-			if match {
-				return
-			}
-			entries := hook.AllEntries()
-			for _, e := range entries {
-				if strings.Contains(e.Message, want) {
-					match = true
-				}
-			}
-		}
 	}
 }

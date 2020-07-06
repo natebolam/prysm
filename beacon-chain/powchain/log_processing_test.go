@@ -19,10 +19,9 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 	testDB "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
-	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	mockPOW "github.com/prysmaticlabs/prysm/beacon-chain/powchain/testing"
 	contracts "github.com/prysmaticlabs/prysm/contracts/deposit-contract"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
@@ -43,10 +42,9 @@ func TestProcessDepositLog_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        beaconDB,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -61,7 +59,12 @@ func TestProcessDepositLog_OK(t *testing.T) {
 	}
 
 	testAcc.Backend.Commit()
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(1)
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	_, depositRoots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -90,7 +93,9 @@ func TestProcessDepositLog_OK(t *testing.T) {
 		t.Fatal("no logs")
 	}
 
-	web3Service.ProcessLog(context.Background(), logs[0])
+	if err := web3Service.ProcessLog(context.Background(), logs[0]); err != nil {
+		t.Fatal(err)
+	}
 
 	testutil.AssertLogsDoNotContain(t, hook, "Could not unpack log")
 	testutil.AssertLogsDoNotContain(t, hook, "Could not save in trie")
@@ -111,10 +116,9 @@ func TestProcessDepositLog_InsertsPendingDeposit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        beaconDB,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -130,7 +134,11 @@ func TestProcessDepositLog_InsertsPendingDeposit(t *testing.T) {
 
 	testAcc.Backend.Commit()
 
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(1)
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, depositRoots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -163,8 +171,12 @@ func TestProcessDepositLog_InsertsPendingDeposit(t *testing.T) {
 
 	web3Service.chainStartData.Chainstarted = true
 
-	web3Service.ProcessDepositLog(context.Background(), logs[0])
-	web3Service.ProcessDepositLog(context.Background(), logs[1])
+	if err := web3Service.ProcessDepositLog(context.Background(), logs[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := web3Service.ProcessDepositLog(context.Background(), logs[1]); err != nil {
+		t.Fatal(err)
+	}
 	pendingDeposits := web3Service.depositCache.PendingDeposits(context.Background(), nil /*blockNum*/)
 	if len(pendingDeposits) != 2 {
 		t.Errorf("Unexpected number of deposits. Wanted 2 deposit, got %+v", pendingDeposits)
@@ -177,10 +189,9 @@ func TestUnpackDepositLogData_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		BeaconDB:        beaconDB,
 		DepositContract: testAcc.ContractAddr,
 	})
@@ -199,7 +210,11 @@ func TestUnpackDepositLogData_OK(t *testing.T) {
 		t.Fatalf("Could not init from contract: %v", err)
 	}
 
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(1)
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, depositRoots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -253,10 +268,9 @@ func TestProcessETH2GenesisLog_8DuplicatePubkeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        beaconDB,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -270,14 +284,21 @@ func TestProcessETH2GenesisLog_8DuplicatePubkeys(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	params.SetupTestConfigCleanup(t)
 	bConfig := params.MinimalSpecConfig()
 	bConfig.MinGenesisTime = 0
 	params.OverrideBeaconConfig(bConfig)
 
 	testAcc.Backend.Commit()
-	testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond())))
+	if err := testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond()))); err != nil {
+		t.Fatal(err)
+	}
 
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(1)
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, depositRoots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -311,7 +332,9 @@ func TestProcessETH2GenesisLog_8DuplicatePubkeys(t *testing.T) {
 	}
 
 	for _, log := range logs {
-		web3Service.ProcessLog(context.Background(), log)
+		if err := web3Service.ProcessLog(context.Background(), log); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if web3Service.chainStartData.Chainstarted {
@@ -323,19 +346,16 @@ func TestProcessETH2GenesisLog_8DuplicatePubkeys(t *testing.T) {
 }
 
 func TestProcessETH2GenesisLog(t *testing.T) {
-	config := &featureconfig.Flags{
-		CustomGenesisDelay: 0,
-	}
-	featureconfig.Init(config)
+	resetCfg := cmd.InitWithReset(&cmd.Flags{CustomGenesisDelay: 0})
+	defer resetCfg()
 	hook := logTest.NewGlobal()
 	testAcc, err := contracts.Setup()
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        beaconDB,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -348,15 +368,21 @@ func TestProcessETH2GenesisLog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	params.SetupTestConfigCleanup(t)
 	bConfig := params.MinimalSpecConfig()
 	bConfig.MinGenesisTime = 0
 	params.OverrideBeaconConfig(bConfig)
 
 	testAcc.Backend.Commit()
-	testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond())))
+	if err := testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond()))); err != nil {
+		t.Fatal(err)
+	}
 
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(uint64(depositsReqForChainStart))
-
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(uint64(depositsReqForChainStart))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, roots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -401,7 +427,9 @@ func TestProcessETH2GenesisLog(t *testing.T) {
 	defer stateSub.Unsubscribe()
 
 	for _, log := range logs {
-		web3Service.ProcessLog(context.Background(), log)
+		if err := web3Service.ProcessLog(context.Background(), log); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	err = web3Service.ProcessETH1Block(context.Background(), big.NewInt(int64(logs[len(logs)-1].BlockNumber)))
@@ -442,10 +470,9 @@ func TestProcessETH2GenesisLog_CorrectNumOfDeposits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	kvStore := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, kvStore)
+	kvStore, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        kvStore,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -460,19 +487,27 @@ func TestProcessETH2GenesisLog_CorrectNumOfDeposits(t *testing.T) {
 	}
 	web3Service.rpcClient = &mockPOW.RPCClient{Backend: testAcc.Backend}
 	web3Service.httpLogger = testAcc.Backend
+	web3Service.eth1DataFetcher = &goodFetcher{backend: testAcc.Backend}
 	web3Service.latestEth1Data.LastRequestedBlock = 0
-	web3Service.latestEth1Data.BlockHeight = 0
+	web3Service.latestEth1Data.BlockHeight = testAcc.Backend.Blockchain().CurrentBlock().NumberU64()
+	web3Service.latestEth1Data.BlockTime = testAcc.Backend.Blockchain().CurrentBlock().Time()
+	params.SetupTestConfigCleanup(t)
 	bConfig := params.MinimalSpecConfig()
 	bConfig.MinGenesisTime = 0
+	bConfig.SecondsPerETH1Block = 10
 	params.OverrideBeaconConfig(bConfig)
-	flags.Get().DeploymentBlock = 0
+	nConfig := params.BeaconNetworkConfig()
+	nConfig.ContractDeploymentBlock = 0
+	params.OverrideBeaconNetworkConfig(nConfig)
 
 	testAcc.Backend.Commit()
-	testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond())))
 
 	totalNumOfDeposits := depositsReqForChainStart + 30
 
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(uint64(totalNumOfDeposits))
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(uint64(totalNumOfDeposits))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, depositRoots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -495,7 +530,12 @@ func TestProcessETH2GenesisLog_CorrectNumOfDeposits(t *testing.T) {
 			testAcc.Backend.Commit()
 		}
 	}
+	// Forward the chain to account for the follow distance
+	for i := uint64(0); i < params.BeaconConfig().Eth1FollowDistance; i++ {
+		testAcc.Backend.Commit()
+	}
 	web3Service.latestEth1Data.BlockHeight = testAcc.Backend.Blockchain().CurrentBlock().NumberU64()
+	web3Service.latestEth1Data.BlockTime = testAcc.Backend.Blockchain().CurrentBlock().Time()
 
 	// Set up our subscriber now to listen for the chain started event.
 	stateChannel := make(chan *feed.Event, 1)
@@ -541,10 +581,9 @@ func TestWeb3ServiceProcessDepositLog_RequestMissedDeposits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        beaconDB,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -558,14 +597,21 @@ func TestWeb3ServiceProcessDepositLog_RequestMissedDeposits(t *testing.T) {
 		t.Fatal(err)
 	}
 	web3Service.httpLogger = testAcc.Backend
+	params.SetupTestConfigCleanup(t)
 	bConfig := params.MinimalSpecConfig()
 	bConfig.MinGenesisTime = 0
 	params.OverrideBeaconConfig(bConfig)
 
 	testAcc.Backend.Commit()
-	testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond())))
+	if err := testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond()))); err != nil {
+		t.Fatal(err)
+	}
 	depositsWanted := 10
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(uint64(depositsWanted))
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(uint64(depositsWanted))
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, depositRoots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -652,15 +698,19 @@ func TestConsistentGenesisState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, beaconDB)
+	beaconDB, _ := testDB.SetupDB(t)
 	web3Service := newPowchainService(t, testAcc, beaconDB)
 
 	testAcc.Backend.Commit()
-	testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond())))
+	if err := testAcc.Backend.AdjustTime(time.Duration(int64(time.Now().Nanosecond()))); err != nil {
+		t.Fatal(err)
+	}
 
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(uint64(depositsReqForChainStart))
-
+	testutil.ResetCache()
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(uint64(depositsReqForChainStart))
+	if err != nil {
+		t.Fatal()
+	}
 	_, roots, err := testutil.DeterministicDepositTrie(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -682,7 +732,7 @@ func TestConsistentGenesisState(t *testing.T) {
 		testAcc.Backend.Commit()
 	}
 
-	for i := 0; i < int(params.BeaconConfig().LogBlockDelay); i++ {
+	for i := uint64(0); i < params.BeaconConfig().Eth1FollowDistance; i++ {
 		testAcc.Backend.Commit()
 	}
 
@@ -696,11 +746,8 @@ func TestConsistentGenesisState(t *testing.T) {
 		testAcc.Backend.Commit()
 	}
 
-	// Tearing down to prevent registration error.
-	testDB.TeardownDB(t, beaconDB)
-
-	newBeaconDB := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, newBeaconDB)
+	// New db to prevent registration error.
+	newBeaconDB, _ := testDB.SetupDB(t)
 
 	newWeb3Service := newPowchainService(t, testAcc, newBeaconDB)
 	go newWeb3Service.run(ctx.Done())
@@ -719,7 +766,7 @@ func TestConsistentGenesisState(t *testing.T) {
 
 func newPowchainService(t *testing.T, eth1Backend *contracts.TestAccount, beaconDB db.Database) *Service {
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: eth1Backend.ContractAddr,
 		BeaconDB:        beaconDB,
 		DepositCache:    depositcache.NewDepositCache(),
@@ -734,10 +781,9 @@ func newPowchainService(t *testing.T, eth1Backend *contracts.TestAccount, beacon
 	}
 
 	web3Service.rpcClient = &mockPOW.RPCClient{Backend: eth1Backend.Backend}
-	web3Service.reader = &goodReader{backend: eth1Backend.Backend}
-	web3Service.blockFetcher = &goodFetcher{backend: eth1Backend.Backend}
+	web3Service.eth1DataFetcher = &goodFetcher{backend: eth1Backend.Backend}
 	web3Service.httpLogger = &goodLogger{backend: eth1Backend.Backend}
-	web3Service.logger = &goodLogger{backend: eth1Backend.Backend}
+	params.SetupTestConfigCleanup(t)
 	bConfig := params.MinimalSpecConfig()
 	bConfig.MinGenesisTime = 0
 	params.OverrideBeaconConfig(bConfig)

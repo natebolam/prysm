@@ -1,6 +1,6 @@
-// Package blockchain defines the life-cycle and status of the beacon chain
-// as well as the Ethereum Serenity beacon chain fork-choice rule based on
-// Casper Proof of Stake finality.
+// Package blockchain defines the life-cycle of the blockchain at the core of
+// eth2, including processing of new blocks and attestations using casper
+// proof of stake.
 package blockchain
 
 import (
@@ -12,17 +12,14 @@ import (
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache/depositcache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
-	"github.com/prysmaticlabs/prysm/beacon-chain/core/epoch/precompute"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
-	"github.com/prysmaticlabs/prysm/beacon-chain/db/filters"
 	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	f "github.com/prysmaticlabs/prysm/beacon-chain/forkchoice"
 	"github.com/prysmaticlabs/prysm/beacon-chain/forkchoice/protoarray"
@@ -33,45 +30,54 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
+	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/slotutil"
 	"go.opencensus.io/trace"
 )
 
 // Service represents a service that handles the internal
 // logic of managing the full PoS beacon chain.
 type Service struct {
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	beaconDB               db.HeadAccessDatabase
-	depositCache           *depositcache.DepositCache
-	chainStartFetcher      powchain.ChainStartFetcher
-	attPool                attestations.Pool
-	slashingPool           *slashings.Pool
-	exitPool               *voluntaryexits.Pool
-	genesisTime            time.Time
-	p2p                    p2p.Broadcaster
-	maxRoutines            int64
-	head                   *head
-	headLock               sync.RWMutex
-	stateNotifier          statefeed.Notifier
-	genesisRoot            [32]byte
-	epochParticipation     map[uint64]*precompute.Balance
-	epochParticipationLock sync.RWMutex
-	forkChoiceStore        f.ForkChoicer
-	justifiedCheckpt       *ethpb.Checkpoint
-	prevJustifiedCheckpt   *ethpb.Checkpoint
-	bestJustifiedCheckpt   *ethpb.Checkpoint
-	finalizedCheckpt       *ethpb.Checkpoint
-	prevFinalizedCheckpt   *ethpb.Checkpoint
-	nextEpochBoundarySlot  uint64
-	voteLock               sync.RWMutex
-	initSyncState          map[[32]byte]*stateTrie.BeaconState
-	boundaryRoots          [][32]byte
-	initSyncStateLock      sync.RWMutex
-	checkpointState        *cache.CheckpointStateCache
-	checkpointStateLock    sync.Mutex
-	stateGen               *stategen.State
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	beaconDB                  db.HeadAccessDatabase
+	depositCache              *depositcache.DepositCache
+	chainStartFetcher         powchain.ChainStartFetcher
+	attPool                   attestations.Pool
+	slashingPool              *slashings.Pool
+	exitPool                  *voluntaryexits.Pool
+	genesisTime               time.Time
+	p2p                       p2p.Broadcaster
+	maxRoutines               int64
+	head                      *head
+	headLock                  sync.RWMutex
+	stateNotifier             statefeed.Notifier
+	genesisRoot               [32]byte
+	forkChoiceStore           f.ForkChoicer
+	justifiedCheckpt          *ethpb.Checkpoint
+	prevJustifiedCheckpt      *ethpb.Checkpoint
+	bestJustifiedCheckpt      *ethpb.Checkpoint
+	finalizedCheckpt          *ethpb.Checkpoint
+	prevFinalizedCheckpt      *ethpb.Checkpoint
+	nextEpochBoundarySlot     uint64
+	voteLock                  sync.RWMutex
+	initSyncState             map[[32]byte]*stateTrie.BeaconState
+	boundaryRoots             [][32]byte
+	initSyncStateLock         sync.RWMutex
+	checkpointState           *cache.CheckpointStateCache
+	checkpointStateLock       sync.Mutex
+	stateGen                  *stategen.State
+	opsService                *attestations.Service
+	initSyncBlocks            map[[32]byte]*ethpb.SignedBeaconBlock
+	initSyncBlocksLock        sync.RWMutex
+	recentCanonicalBlocks     map[[32]byte]bool
+	recentCanonicalBlocksLock sync.RWMutex
+	justifiedBalances         []uint64
+	justifiedBalancesLock     sync.RWMutex
 }
 
 // Config options for the service.
@@ -87,6 +93,8 @@ type Config struct {
 	MaxRoutines       int64
 	StateNotifier     statefeed.Notifier
 	ForkChoiceStore   f.ForkChoicer
+	OpsService        *attestations.Service
+	StateGen          *stategen.State
 }
 
 // NewService instantiates a new block service instance that will
@@ -94,23 +102,26 @@ type Config struct {
 func NewService(ctx context.Context, cfg *Config) (*Service, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	return &Service{
-		ctx:                ctx,
-		cancel:             cancel,
-		beaconDB:           cfg.BeaconDB,
-		depositCache:       cfg.DepositCache,
-		chainStartFetcher:  cfg.ChainStartFetcher,
-		attPool:            cfg.AttPool,
-		exitPool:           cfg.ExitPool,
-		slashingPool:       cfg.SlashingPool,
-		p2p:                cfg.P2p,
-		maxRoutines:        cfg.MaxRoutines,
-		stateNotifier:      cfg.StateNotifier,
-		epochParticipation: make(map[uint64]*precompute.Balance),
-		forkChoiceStore:    cfg.ForkChoiceStore,
-		initSyncState:      make(map[[32]byte]*stateTrie.BeaconState),
-		boundaryRoots:      [][32]byte{},
-		checkpointState:    cache.NewCheckpointStateCache(),
-		stateGen:           stategen.New(cfg.BeaconDB),
+		ctx:                   ctx,
+		cancel:                cancel,
+		beaconDB:              cfg.BeaconDB,
+		depositCache:          cfg.DepositCache,
+		chainStartFetcher:     cfg.ChainStartFetcher,
+		attPool:               cfg.AttPool,
+		exitPool:              cfg.ExitPool,
+		slashingPool:          cfg.SlashingPool,
+		p2p:                   cfg.P2p,
+		maxRoutines:           cfg.MaxRoutines,
+		stateNotifier:         cfg.StateNotifier,
+		forkChoiceStore:       cfg.ForkChoiceStore,
+		initSyncState:         make(map[[32]byte]*stateTrie.BeaconState),
+		boundaryRoots:         [][32]byte{},
+		checkpointState:       cache.NewCheckpointStateCache(),
+		opsService:            cfg.OpsService,
+		stateGen:              cfg.StateGen,
+		initSyncBlocks:        make(map[[32]byte]*ethpb.SignedBeaconBlock),
+		recentCanonicalBlocks: make(map[[32]byte]bool),
+		justifiedBalances:     make([]uint64, 0),
 	}, nil
 }
 
@@ -129,20 +140,29 @@ func (s *Service) Start() {
 	if err != nil {
 		log.Fatalf("Could not fetch finalized cp: %v", err)
 	}
+
 	if beaconState == nil {
-		beaconState, err = s.beaconDB.State(ctx, bytesutil.ToBytes32(cp.Root))
+		beaconState, err = s.stateGen.StateByRoot(ctx, bytesutil.ToBytes32(cp.Root))
 		if err != nil {
-			log.Fatalf("Could not fetch beacon state: %v", err)
+			log.Fatalf("Could not fetch beacon state by root: %v", err)
 		}
 	}
+
+	// Make sure that attestation processor is subscribed and ready for state initializing event.
+	attestationProcessorSubscribed := make(chan struct{}, 1)
 
 	// If the chain has already been initialized, simply start the block processing routine.
 	if beaconState != nil {
 		log.Info("Blockchain data already exists in DB, initializing...")
 		s.genesisTime = time.Unix(int64(beaconState.GenesisTime()), 0)
+		s.opsService.SetGenesisTime(beaconState.GenesisTime())
 		if err := s.initializeChainInfo(ctx); err != nil {
 			log.Fatalf("Could not set up chain info: %v", err)
 		}
+
+		// We start a counter to genesis, if needed.
+		go slotutil.CountdownToGenesis(ctx, s.genesisTime, uint64(beaconState.NumValidators()))
+
 		justifiedCheckpoint, err := s.beaconDB.JustifiedCheckpoint(ctx)
 		if err != nil {
 			log.Fatalf("Could not get justified checkpoint: %v", err)
@@ -154,22 +174,20 @@ func (s *Service) Start() {
 
 		// Resume fork choice.
 		s.justifiedCheckpt = stateTrie.CopyCheckpoint(justifiedCheckpoint)
+		if err := s.cacheJustifiedStateBalances(ctx, bytesutil.ToBytes32(s.justifiedCheckpt.Root)); err != nil {
+			log.Fatalf("Could not cache justified state balances: %v", err)
+		}
 		s.prevJustifiedCheckpt = stateTrie.CopyCheckpoint(justifiedCheckpoint)
 		s.bestJustifiedCheckpt = stateTrie.CopyCheckpoint(justifiedCheckpoint)
 		s.finalizedCheckpt = stateTrie.CopyCheckpoint(finalizedCheckpoint)
 		s.prevFinalizedCheckpt = stateTrie.CopyCheckpoint(finalizedCheckpoint)
 		s.resumeForkChoice(justifiedCheckpoint, finalizedCheckpoint)
 
-		if finalizedCheckpoint.Epoch > 1 {
-			if err := s.pruneGarbageState(ctx, helpers.StartSlot(finalizedCheckpoint.Epoch)-params.BeaconConfig().SlotsPerEpoch); err != nil {
-				log.WithError(err).Warn("Could not prune old states")
-			}
-		}
-
 		s.stateNotifier.StateFeed().Send(&feed.Event{
 			Type: statefeed.Initialized,
 			Data: &statefeed.InitializedData{
-				StartTime: s.genesisTime,
+				StartTime:             s.genesisTime,
+				GenesisValidatorsRoot: beaconState.GenesisValidatorRoot(),
 			},
 		})
 	} else {
@@ -182,11 +200,16 @@ func (s *Service) Start() {
 			stateChannel := make(chan *feed.Event, 1)
 			stateSub := s.stateNotifier.StateFeed().Subscribe(stateChannel)
 			defer stateSub.Unsubscribe()
+			<-attestationProcessorSubscribed
 			for {
 				select {
 				case event := <-stateChannel:
 					if event.Type == statefeed.ChainStarted {
-						data := event.Data.(*statefeed.ChainStartedData)
+						data, ok := event.Data.(*statefeed.ChainStartedData)
+						if !ok {
+							log.Error("event data is not type *statefeed.ChainStartedData")
+							return
+						}
 						log.WithField("starttime", data.StartTime).Debug("Received chain start event")
 						s.processChainStartTime(ctx, data.StartTime)
 						return
@@ -202,20 +225,27 @@ func (s *Service) Start() {
 		}()
 	}
 
-	go s.processAttestation()
+	go s.processAttestation(attestationProcessorSubscribed)
 }
 
 // processChainStartTime initializes a series of deposits from the ChainStart deposits in the eth1
 // deposit contract, initializes the beacon chain's state, and kicks off the beacon chain.
 func (s *Service) processChainStartTime(ctx context.Context, genesisTime time.Time) {
 	preGenesisState := s.chainStartFetcher.PreGenesisState()
-	if err := s.initializeBeaconChain(ctx, genesisTime, preGenesisState, s.chainStartFetcher.ChainStartEth1Data()); err != nil {
+	initializedState, err := s.initializeBeaconChain(ctx, genesisTime, preGenesisState, s.chainStartFetcher.ChainStartEth1Data())
+	if err != nil {
 		log.Fatalf("Could not initialize beacon chain: %v", err)
 	}
+	// We start a counter to genesis, if needed.
+	go slotutil.CountdownToGenesis(ctx, genesisTime, uint64(initializedState.NumValidators()))
+
+	// We send out a state initialized event to the rest of the services
+	// running in the beacon node.
 	s.stateNotifier.StateFeed().Send(&feed.Event{
 		Type: statefeed.Initialized,
 		Data: &statefeed.InitializedData{
-			StartTime: genesisTime,
+			StartTime:             genesisTime,
+			GenesisValidatorsRoot: initializedState.GenesisValidatorRoot(),
 		},
 	})
 }
@@ -227,7 +257,7 @@ func (s *Service) initializeBeaconChain(
 	ctx context.Context,
 	genesisTime time.Time,
 	preGenesisState *stateTrie.BeaconState,
-	eth1data *ethpb.Eth1Data) error {
+	eth1data *ethpb.Eth1Data) (*stateTrie.BeaconState, error) {
 	_, span := trace.StartSpan(context.Background(), "beacon-chain.Service.initializeBeaconChain")
 	defer span.End()
 	s.genesisTime = genesisTime
@@ -235,11 +265,11 @@ func (s *Service) initializeBeaconChain(
 
 	genesisState, err := state.OptimizedGenesisBeaconState(unixTime, preGenesisState, eth1data)
 	if err != nil {
-		return errors.Wrap(err, "could not initialize genesis state")
+		return nil, errors.Wrap(err, "could not initialize genesis state")
 	}
 
 	if err := s.saveGenesisData(ctx, genesisState); err != nil {
-		return errors.Wrap(err, "could not save genesis data")
+		return nil, errors.Wrap(err, "could not save genesis data")
 	}
 
 	log.Info("Initialized beacon chain genesis state")
@@ -249,13 +279,15 @@ func (s *Service) initializeBeaconChain(
 
 	// Update committee shuffled indices for genesis epoch.
 	if err := helpers.UpdateCommitteeCache(genesisState, 0 /* genesis epoch */); err != nil {
-		return err
+		return nil, err
 	}
 	if err := helpers.UpdateProposerIndicesInCache(genesisState, 0 /* genesis epoch */); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	s.opsService.SetGenesisTime(genesisState.GenesisTime())
+
+	return genesisState, nil
 }
 
 // Stop the blockchain service's main event loop and associated goroutines.
@@ -267,7 +299,7 @@ func (s *Service) Stop() error {
 // Status always returns nil unless there is an error condition that causes
 // this service to be unhealthy.
 func (s *Service) Status() error {
-	if runtime.NumGoroutine() > int(s.maxRoutines) {
+	if int64(runtime.NumGoroutine()) > s.maxRoutines {
 		return fmt.Errorf("too many goroutines %d", runtime.NumGoroutine())
 	}
 	return nil
@@ -279,50 +311,46 @@ func (s *Service) ClearCachedStates() {
 	s.initSyncState = map[[32]byte]*stateTrie.BeaconState{}
 }
 
-// This gets called when beacon chain is first initialized to save validator indices and public keys in db.
-func (s *Service) saveGenesisValidators(ctx context.Context, state *stateTrie.BeaconState) error {
-	pubkeys := make([][48]byte, state.NumValidators())
-	indices := make([]uint64, state.NumValidators())
-
-	for i := 0; i < state.NumValidators(); i++ {
-		pubkeys[i] = state.PubkeyAtIndex(uint64(i))
-		indices[i] = uint64(i)
-	}
-	return s.beaconDB.SaveValidatorIndices(ctx, pubkeys, indices)
-}
-
 // This gets called when beacon chain is first initialized to save genesis data (state, block, and more) in db.
 func (s *Service) saveGenesisData(ctx context.Context, genesisState *stateTrie.BeaconState) error {
-	stateRoot, err := genesisState.HashTreeRoot()
+	stateRoot, err := genesisState.HashTreeRoot(ctx)
 	if err != nil {
 		return err
 	}
 	genesisBlk := blocks.NewGenesisBlock(stateRoot[:])
-	genesisBlkRoot, err := ssz.HashTreeRoot(genesisBlk.Block)
+	genesisBlkRoot, err := stateutil.BlockRoot(genesisBlk.Block)
 	if err != nil {
 		return errors.Wrap(err, "could not get genesis block root")
 	}
+	s.genesisRoot = genesisBlkRoot
 
 	if err := s.beaconDB.SaveBlock(ctx, genesisBlk); err != nil {
 		return errors.Wrap(err, "could not save genesis block")
 	}
-	if err := s.beaconDB.SaveState(ctx, genesisState, genesisBlkRoot); err != nil {
+	if err := s.stateGen.SaveState(ctx, genesisBlkRoot, genesisState); err != nil {
 		return errors.Wrap(err, "could not save genesis state")
 	}
+	if err := s.beaconDB.SaveStateSummary(ctx, &pb.StateSummary{
+		Slot: 0,
+		Root: genesisBlkRoot[:],
+	}); err != nil {
+		return err
+	}
+
 	if err := s.beaconDB.SaveHeadBlockRoot(ctx, genesisBlkRoot); err != nil {
 		return errors.Wrap(err, "could not save head block root")
 	}
 	if err := s.beaconDB.SaveGenesisBlockRoot(ctx, genesisBlkRoot); err != nil {
-		return errors.Wrap(err, "could save genesis block root")
-	}
-	if err := s.saveGenesisValidators(ctx, genesisState); err != nil {
-		return errors.Wrap(err, "could not save genesis validators")
+		return errors.Wrap(err, "could not save genesis block root")
 	}
 
-	genesisCheckpoint := &ethpb.Checkpoint{Root: genesisBlkRoot[:]}
+	// Finalized checkpoint at genesis is a zero hash.
+	genesisCheckpoint := genesisState.FinalizedCheckpoint()
 
-	// Add the genesis block to the fork choice store.
 	s.justifiedCheckpt = stateTrie.CopyCheckpoint(genesisCheckpoint)
+	if err := s.cacheJustifiedStateBalances(ctx, genesisBlkRoot); err != nil {
+		return err
+	}
 	s.prevJustifiedCheckpt = stateTrie.CopyCheckpoint(genesisCheckpoint)
 	s.bestJustifiedCheckpt = stateTrie.CopyCheckpoint(genesisCheckpoint)
 	s.finalizedCheckpt = stateTrie.CopyCheckpoint(genesisCheckpoint)
@@ -332,6 +360,7 @@ func (s *Service) saveGenesisData(ctx context.Context, genesisState *stateTrie.B
 		genesisBlk.Block.Slot,
 		genesisBlkRoot,
 		params.BeaconConfig().ZeroHash,
+		[32]byte{},
 		genesisCheckpoint.Epoch,
 		genesisCheckpoint.Epoch); err != nil {
 		log.Fatalf("Could not process genesis block for fork choice: %v", err)
@@ -351,7 +380,7 @@ func (s *Service) initializeChainInfo(ctx context.Context) error {
 	if genesisBlock == nil {
 		return errors.New("no genesis block in db")
 	}
-	genesisBlkRoot, err := ssz.HashTreeRoot(genesisBlock.Block)
+	genesisBlkRoot, err := stateutil.BlockRoot(genesisBlock.Block)
 	if err != nil {
 		return errors.Wrap(err, "could not get signing root of genesis block")
 	}
@@ -362,7 +391,7 @@ func (s *Service) initializeChainInfo(ctx context.Context) error {
 		if err != nil {
 			return errors.Wrap(err, "could not retrieve head block")
 		}
-		headRoot, err := ssz.HashTreeRoot(headBlock.Block)
+		headRoot, err := stateutil.BlockRoot(headBlock.Block)
 		if err != nil {
 			return errors.Wrap(err, "could not hash head block")
 		}
@@ -383,35 +412,44 @@ func (s *Service) initializeChainInfo(ctx context.Context) error {
 		// would be the genesis state and block.
 		return errors.New("no finalized epoch in the database")
 	}
-	finalizedState, err := s.beaconDB.State(ctx, bytesutil.ToBytes32(finalized.Root))
+	finalizedRoot := bytesutil.ToBytes32(finalized.Root)
+	var finalizedState *stateTrie.BeaconState
+
+	finalizedState, err = s.stateGen.Resume(ctx)
 	if err != nil {
 		return errors.Wrap(err, "could not get finalized state from db")
 	}
-	finalizedBlock, err := s.beaconDB.Block(ctx, bytesutil.ToBytes32(finalized.Root))
+	if !featureconfig.Get().SkipRegenHistoricalStates {
+		// Since historical states were skipped, the node should start from last finalized check point.
+		finalizedRoot = s.beaconDB.LastArchivedIndexRoot(ctx)
+		if finalizedRoot == params.BeaconConfig().ZeroHash {
+			finalizedRoot = bytesutil.ToBytes32(finalized.Root)
+		}
+	}
+
+	finalizedBlock, err := s.beaconDB.Block(ctx, finalizedRoot)
 	if err != nil {
 		return errors.Wrap(err, "could not get finalized block from db")
+	}
+
+	// To skip the regeneration of historical state, the node has to generate the parent of the last finalized state.
+	// We don't need to do this for genesis.
+	atGenesis := s.CurrentSlot() == 0
+	if featureconfig.Get().SkipRegenHistoricalStates && !atGenesis {
+		parentRoot := bytesutil.ToBytes32(finalizedBlock.Block.ParentRoot)
+		parentState, err := s.generateState(ctx, finalizedRoot, parentRoot)
+		if err != nil {
+			return err
+		}
+		if s.beaconDB.SaveState(ctx, parentState, parentRoot) != nil {
+			return err
+		}
 	}
 
 	if finalizedState == nil || finalizedBlock == nil {
 		return errors.New("finalized state and block can't be nil")
 	}
-
-	s.setHead(bytesutil.ToBytes32(finalized.Root), finalizedBlock, finalizedState)
-
-	return nil
-}
-
-// This is called when a client starts from a non-genesis slot. It deletes the states in DB
-// from slot 1 (avoid genesis state) to `slot`.
-func (s *Service) pruneGarbageState(ctx context.Context, slot uint64) error {
-	filter := filters.NewFilter().SetStartSlot(1).SetEndSlot(slot)
-	roots, err := s.beaconDB.BlockRoots(ctx, filter)
-	if err != nil {
-		return err
-	}
-	if err := s.beaconDB.DeleteStates(ctx, roots); err != nil {
-		return err
-	}
+	s.setHead(finalizedRoot, finalizedBlock, finalizedState)
 
 	return nil
 }

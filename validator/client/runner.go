@@ -2,11 +2,13 @@ package client
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
-	pb "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"go.opencensus.io/trace"
 	"google.golang.org/grpc/codes"
@@ -17,18 +19,21 @@ import (
 type Validator interface {
 	Done()
 	WaitForChainStart(ctx context.Context) error
-	WaitForActivation(ctx context.Context) error
 	WaitForSync(ctx context.Context) error
+	WaitForSynced(ctx context.Context) error
+	WaitForActivation(ctx context.Context) error
 	CanonicalHeadSlot(ctx context.Context) (uint64, error)
 	NextSlot() <-chan uint64
 	SlotDeadline(slot uint64) time.Time
 	LogValidatorGainsAndLosses(ctx context.Context, slot uint64) error
 	UpdateDuties(ctx context.Context, slot uint64) error
-	RolesAt(ctx context.Context, slot uint64) (map[[48]byte][]pb.ValidatorRole, error) // validator pubKey -> roles
+	UpdateProtections(ctx context.Context, slot uint64) error
+	RolesAt(ctx context.Context, slot uint64) (map[[48]byte][]validatorRole, error) // validator pubKey -> roles
 	SubmitAttestation(ctx context.Context, slot uint64, pubKey [48]byte)
 	ProposeBlock(ctx context.Context, slot uint64, pubKey [48]byte)
 	SubmitAggregateAndProof(ctx context.Context, slot uint64, pubKey [48]byte)
 	LogAttestationsSubmitted()
+	SaveProtections(ctx context.Context) error
 	UpdateDomainDataCaches(ctx context.Context, slot uint64)
 }
 
@@ -44,11 +49,17 @@ type Validator interface {
 // 6 - Perform assigned role, if any
 func run(ctx context.Context, v Validator) {
 	defer v.Done()
-	if err := v.WaitForChainStart(ctx); err != nil {
-		log.Fatalf("Could not determine if beacon chain started: %v", err)
-	}
-	if err := v.WaitForSync(ctx); err != nil {
-		log.Fatalf("Could not determine if beacon node synced: %v", err)
+	if featureconfig.Get().WaitForSynced {
+		if err := v.WaitForSynced(ctx); err != nil {
+			log.Fatalf("Could not determine if chain started and beacon node is synced: %v", err)
+		}
+	} else {
+		if err := v.WaitForChainStart(ctx); err != nil {
+			log.Fatalf("Could not determine if beacon chain started: %v", err)
+		}
+		if err := v.WaitForSync(ctx); err != nil {
+			log.Fatalf("Could not determine if beacon node synced: %v", err)
+		}
 	}
 	if err := v.WaitForActivation(ctx); err != nil {
 		log.Fatalf("Could not wait for validator activation: %v", err)
@@ -69,9 +80,11 @@ func run(ctx context.Context, v Validator) {
 			return // Exit if context is canceled.
 		case slot := <-v.NextSlot():
 			span.AddAttributes(trace.Int64Attribute("slot", int64(slot)))
-			slotCtx, cancel := context.WithDeadline(ctx, v.SlotDeadline(slot))
+			deadline := v.SlotDeadline(slot)
+			slotCtx, cancel := context.WithDeadline(ctx, deadline)
 			// Report this validator client's rewards and penalties throughout its lifecycle.
 			log := log.WithField("slot", slot)
+			log.WithField("deadline", deadline).Debug("Set deadline for proposals and attestations")
 			if err := v.LogValidatorGainsAndLosses(slotCtx, slot); err != nil {
 				log.WithError(err).Error("Could not report validator's rewards/penalties")
 			}
@@ -83,6 +96,13 @@ func run(ctx context.Context, v Validator) {
 				cancel()
 				span.End()
 				continue
+			}
+
+			if featureconfig.Get().LocalProtection {
+				if err := v.UpdateProtections(ctx, slot); err != nil {
+					log.WithError(err).Error("Could not update validator protection")
+					continue
+				}
 			}
 
 			// Start fetching domain data for the next epoch.
@@ -97,30 +117,35 @@ func run(ctx context.Context, v Validator) {
 				log.WithError(err).Error("Could not get validator roles")
 				continue
 			}
-			for id, roles := range allRoles {
-				wg.Add(1)
-				go func(roles []pb.ValidatorRole, id [48]byte) {
-					for _, role := range roles {
+			for pubKey, roles := range allRoles {
+				wg.Add(len(roles))
+				for _, role := range roles {
+					go func(role validatorRole, pubKey [48]byte) {
+						defer wg.Done()
 						switch role {
-						case pb.ValidatorRole_ATTESTER:
-							go v.SubmitAttestation(slotCtx, slot, id)
-						case pb.ValidatorRole_PROPOSER:
-							go v.ProposeBlock(slotCtx, slot, id)
-						case pb.ValidatorRole_AGGREGATOR:
-							go v.SubmitAggregateAndProof(slotCtx, slot, id)
-						case pb.ValidatorRole_UNKNOWN:
-							log.Debug("No active roles, doing nothing")
+						case roleAttester:
+							v.SubmitAttestation(slotCtx, slot, pubKey)
+						case roleProposer:
+							v.ProposeBlock(slotCtx, slot, pubKey)
+						case roleAggregator:
+							v.SubmitAggregateAndProof(slotCtx, slot, pubKey)
+						case roleUnknown:
+							log.WithField("pubKey", fmt.Sprintf("%#x", bytesutil.Trunc(pubKey[:]))).Trace("No active roles, doing nothing")
 						default:
 							log.Warnf("Unhandled role %v", role)
 						}
-					}
-					wg.Done()
-				}(roles, id)
+					}(role, pubKey)
+				}
 			}
 			// Wait for all processes to complete, then report span complete.
 			go func() {
 				wg.Wait()
 				v.LogAttestationsSubmitted()
+				if featureconfig.Get().LocalProtection {
+					if err := v.SaveProtections(ctx); err != nil {
+						log.WithError(err).Error("Could not save validator protection")
+					}
+				}
 				span.End()
 			}()
 		}

@@ -25,7 +25,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//         0
 	//        /
 	//       2 <- head
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(2), params.BeaconConfig().ZeroHash, 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(2), params.BeaconConfig().ZeroHash, [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -40,7 +40,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//            0
 	//           / \
 	//  head -> 2  1
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(1), params.BeaconConfig().ZeroHash, 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(1), params.BeaconConfig().ZeroHash, [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -57,7 +57,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//  head -> 2  1
 	//             |
 	//             3
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(3), indexToHash(1), 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(3), indexToHash(1), [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -74,7 +74,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//          2  1
 	//          |  |
 	//  head -> 4  3
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(4), indexToHash(2), 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(4), indexToHash(2), [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -93,7 +93,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//  head -> 4  3
 	//          |
 	//          5 <- justified epoch = 2
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(5), indexToHash(4), 2, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(5), indexToHash(4), [32]byte{}, 2, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -113,7 +113,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//          |
 	//          5 <- starting from 5 with justified epoch 0 should error
 	r, err = f.Head(context.Background(), 1, indexToHash(5), balances, 1)
-	wanted := "head at slot 0 with weight 0 is not eligible, finalizedEpoch 1 != 1, justifiedEpoch 2 != 1"
+	wanted := "head at slot 0 with weight 0 is not eligible, FinalizedEpoch 1 != 1, JustifiedEpoch 2 != 1"
 	if !strings.Contains(err.Error(), wanted) {
 		t.Fatal("Did not get wanted error")
 	}
@@ -144,7 +144,7 @@ func TestNoVote_CanFindHead(t *testing.T) {
 	//          5
 	//          |
 	//          6 <- head
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(6), indexToHash(5), 2, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(6), indexToHash(5), [32]byte{}, 2, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 2, indexToHash(5), balances, 1)

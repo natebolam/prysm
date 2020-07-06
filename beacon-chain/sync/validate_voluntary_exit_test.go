@@ -7,10 +7,10 @@ import (
 	"reflect"
 	"testing"
 
+	lru "github.com/hashicorp/golang-lru"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pubsubpb "github.com/libp2p/go-libp2p-pubsub/pb"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
@@ -26,7 +26,7 @@ func setupValidExit(t *testing.T) (*ethpb.SignedVoluntaryExit, *stateTrie.Beacon
 	exit := &ethpb.SignedVoluntaryExit{
 		Exit: &ethpb.VoluntaryExit{
 			ValidatorIndex: 0,
-			Epoch:          1 + params.BeaconConfig().PersistentCommitteePeriod,
+			Epoch:          1 + params.BeaconConfig().ShardCommitteePeriod,
 		},
 	}
 	registry := []*ethpb.Validator{
@@ -47,18 +47,21 @@ func setupValidExit(t *testing.T) (*ethpb.SignedVoluntaryExit, *stateTrie.Beacon
 		t.Fatal(err)
 	}
 	if err := state.SetSlot(
-		state.Slot() + (params.BeaconConfig().PersistentCommitteePeriod * params.BeaconConfig().SlotsPerEpoch),
+		state.Slot() + (params.BeaconConfig().ShardCommitteePeriod * params.BeaconConfig().SlotsPerEpoch),
 	); err != nil {
 		t.Fatal(err)
 	}
-	signingRoot, err := ssz.HashTreeRoot(exit.Exit)
+	domain, err := helpers.Domain(state.Fork(), helpers.CurrentEpoch(state), params.BeaconConfig().DomainVoluntaryExit, state.GenesisValidatorRoot())
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingRoot, err := helpers.ComputeSigningRoot(exit.Exit, domain)
 	if err != nil {
 		t.Error(err)
 	}
-	domain := helpers.Domain(state.Fork(), helpers.CurrentEpoch(state), params.BeaconConfig().DomainVoluntaryExit)
 	priv := bls.RandKey()
 
-	sig := priv.Sign(signingRoot[:], domain)
+	sig := priv.Sign(signingRoot[:])
 	exit.Signature = sig.Marshal()
 
 	val, err := state.ValidatorAtIndex(0)
@@ -84,16 +87,21 @@ func TestValidateVoluntaryExit_ValidExit(t *testing.T) {
 
 	exit, s := setupValidExit(t)
 
+	c, err := lru.New(10)
+	if err != nil {
+		t.Fatal(err)
+	}
 	r := &Service{
 		p2p: p,
 		chain: &mock.ChainService{
 			State: s,
 		},
-		initialSync: &mockSync.Sync{IsSyncing: false},
+		initialSync:   &mockSync.Sync{IsSyncing: false},
+		seenExitCache: c,
 	}
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().Encode(buf, exit); err != nil {
+	if _, err := p.Encoding().EncodeGossip(buf, exit); err != nil {
 		t.Fatal(err)
 	}
 	m := &pubsub.Message{
@@ -104,7 +112,7 @@ func TestValidateVoluntaryExit_ValidExit(t *testing.T) {
 			},
 		},
 	}
-	valid := r.validateVoluntaryExit(ctx, "", m)
+	valid := r.validateVoluntaryExit(ctx, "", m) == pubsub.ValidationAccept
 	if !valid {
 		t.Error("Failed validation")
 	}
@@ -128,7 +136,7 @@ func TestValidateVoluntaryExit_ValidExit_Syncing(t *testing.T) {
 		initialSync: &mockSync.Sync{IsSyncing: true},
 	}
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().Encode(buf, exit); err != nil {
+	if _, err := p.Encoding().EncodeGossip(buf, exit); err != nil {
 		t.Fatal(err)
 	}
 	m := &pubsub.Message{
@@ -139,7 +147,7 @@ func TestValidateVoluntaryExit_ValidExit_Syncing(t *testing.T) {
 			},
 		},
 	}
-	valid := r.validateVoluntaryExit(ctx, "", m)
+	valid := r.validateVoluntaryExit(ctx, "", m) == pubsub.ValidationAccept
 	if valid {
 		t.Error("Validation should have failed")
 	}

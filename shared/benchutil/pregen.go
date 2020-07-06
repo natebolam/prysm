@@ -1,3 +1,5 @@
+// Package benchutil contains useful helpers
+// for pregenerating filled data structures such as blocks/states for benchmarks.
 package benchutil
 
 import (
@@ -6,7 +8,6 @@ import (
 
 	"github.com/bazelbuild/rules_go/go/tools/bazel"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
@@ -49,7 +50,7 @@ func PreGenState1Epoch() (*beaconstate.BeaconState, error) {
 		return nil, err
 	}
 	beaconState := &pb.BeaconState{}
-	if err := ssz.Unmarshal(beaconBytes, beaconState); err != nil {
+	if err := beaconState.UnmarshalSSZ(beaconBytes); err != nil {
 		return nil, err
 	}
 	return beaconstate.InitializeFromProto(beaconState)
@@ -66,7 +67,7 @@ func PreGenState2FullEpochs() (*beaconstate.BeaconState, error) {
 		return nil, err
 	}
 	beaconState := &pb.BeaconState{}
-	if err := ssz.Unmarshal(beaconBytes, beaconState); err != nil {
+	if err := beaconState.UnmarshalSSZ(beaconBytes); err != nil {
 		return nil, err
 	}
 	return beaconstate.InitializeFromProto(beaconState)
@@ -83,7 +84,7 @@ func PreGenFullBlock() (*ethpb.SignedBeaconBlock, error) {
 		return nil, err
 	}
 	beaconBlock := &ethpb.SignedBeaconBlock{}
-	if err := ssz.Unmarshal(blockBytes, beaconBlock); err != nil {
+	if err := beaconBlock.UnmarshalSSZ(blockBytes); err != nil {
 		return nil, err
 	}
 	return beaconBlock, nil
@@ -96,7 +97,7 @@ func SetBenchmarkConfig() {
 	slotsPerEpoch := params.BeaconConfig().SlotsPerEpoch
 	committeeSize := (ValidatorCount / slotsPerEpoch) / (maxAtts / slotsPerEpoch)
 	c := params.BeaconConfig()
-	c.PersistentCommitteePeriod = 0
+	c.ShardCommitteePeriod = 0
 	c.MinValidatorWithdrawabilityDelay = 0
 	c.TargetCommitteeSize = committeeSize
 	c.MaxAttestations = maxAtts

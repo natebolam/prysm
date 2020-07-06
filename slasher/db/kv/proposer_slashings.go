@@ -4,17 +4,17 @@ import (
 	"bytes"
 	"context"
 
-	"github.com/boltdb/bolt"
 	"github.com/gogo/protobuf/proto"
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/slasher/db/types"
+	bolt "go.etcd.io/bbolt"
 	"go.opencensus.io/trace"
 )
 
 func unmarshalProposerSlashing(ctx context.Context, enc []byte) (*ethpb.ProposerSlashing, error) {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.unmarshalProposerSlashing")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.unmarshalProposerSlashing")
 	defer span.End()
 	protoSlashing := &ethpb.ProposerSlashing{}
 	if err := proto.Unmarshal(enc, protoSlashing); err != nil {
@@ -24,7 +24,7 @@ func unmarshalProposerSlashing(ctx context.Context, enc []byte) (*ethpb.Proposer
 }
 
 func unmarshalProposerSlashingArray(ctx context.Context, encoded [][]byte) ([]*ethpb.ProposerSlashing, error) {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.unmarshalProposerSlashingArray")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.unmarshalProposerSlashingArray")
 	defer span.End()
 	proposerSlashings := make([]*ethpb.ProposerSlashing, len(encoded))
 	for i, enc := range encoded {
@@ -39,7 +39,7 @@ func unmarshalProposerSlashingArray(ctx context.Context, encoded [][]byte) ([]*e
 
 // ProposalSlashingsByStatus returns all the proposal slashing proofs with a certain status.
 func (db *Store) ProposalSlashingsByStatus(ctx context.Context, status types.SlashingStatus) ([]*ethpb.ProposerSlashing, error) {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.ProposalSlashingsByStatus")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.ProposalSlashingsByStatus")
 	defer span.End()
 	encoded := make([][]byte, 0)
 	err := db.view(func(tx *bolt.Tx) error {
@@ -60,7 +60,7 @@ func (db *Store) ProposalSlashingsByStatus(ctx context.Context, status types.Sla
 
 // DeleteProposerSlashing deletes a proposer slashing proof.
 func (db *Store) DeleteProposerSlashing(ctx context.Context, slashing *ethpb.ProposerSlashing) error {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.DeleteProposerSlashing")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.deleteProposerSlashing")
 	defer span.End()
 	root, err := hashutil.HashProto(slashing)
 	if err != nil {
@@ -79,7 +79,7 @@ func (db *Store) DeleteProposerSlashing(ctx context.Context, slashing *ethpb.Pro
 
 // HasProposerSlashing returns the slashing key if it is found in db.
 func (db *Store) HasProposerSlashing(ctx context.Context, slashing *ethpb.ProposerSlashing) (bool, types.SlashingStatus, error) {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.HasProposerSlashing")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.HasProposerSlashing")
 	defer span.End()
 	var status types.SlashingStatus
 	var found bool
@@ -103,13 +103,16 @@ func (db *Store) HasProposerSlashing(ctx context.Context, slashing *ethpb.Propos
 
 // SaveProposerSlashing accepts a proposer slashing and its status header and writes it to disk.
 func (db *Store) SaveProposerSlashing(ctx context.Context, status types.SlashingStatus, slashing *ethpb.ProposerSlashing) error {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.SaveProposerSlashing")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.SaveProposerSlashing")
 	defer span.End()
 	enc, err := proto.Marshal(slashing)
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal")
 	}
-	root := hashutil.Hash(enc)
+	root, err := hashutil.HashProto(slashing)
+	if err != nil {
+		return err
+	}
 	key := encodeTypeRoot(types.SlashingType(types.Proposal), root)
 	return db.update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(slashingBucket)
@@ -120,7 +123,7 @@ func (db *Store) SaveProposerSlashing(ctx context.Context, status types.Slashing
 
 // SaveProposerSlashings accepts a slice of slashing proof and its status and writes it to disk.
 func (db *Store) SaveProposerSlashings(ctx context.Context, status types.SlashingStatus, slashings []*ethpb.ProposerSlashing) error {
-	ctx, span := trace.StartSpan(ctx, "SlasherDB.SaveProposerSlashings")
+	ctx, span := trace.StartSpan(ctx, "slasherDB.SaveProposerSlashings")
 	defer span.End()
 	encSlashings := make([][]byte, len(slashings))
 	keys := make([][]byte, len(slashings))
@@ -130,7 +133,10 @@ func (db *Store) SaveProposerSlashings(ctx context.Context, status types.Slashin
 		if err != nil {
 			return errors.Wrap(err, "failed to marshal")
 		}
-		root := hashutil.Hash(encSlashings[i])
+		root, err := hashutil.HashProto(slashing)
+		if err != nil {
+			return err
+		}
 		keys[i] = encodeTypeRoot(types.SlashingType(types.Proposal), root)
 	}
 

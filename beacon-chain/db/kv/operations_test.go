@@ -11,7 +11,6 @@ import (
 
 func TestStore_VoluntaryExits_CRUD(t *testing.T) {
 	db := setupDB(t)
-	defer teardownDB(t, db)
 	ctx := context.Background()
 	exit := &ethpb.VoluntaryExit{
 		Epoch: 5,
@@ -40,7 +39,7 @@ func TestStore_VoluntaryExits_CRUD(t *testing.T) {
 	if !proto.Equal(exit, retrieved) {
 		t.Errorf("Wanted %v, received %v", exit, retrieved)
 	}
-	if err := db.DeleteVoluntaryExit(ctx, exitRoot); err != nil {
+	if err := db.deleteVoluntaryExit(ctx, exitRoot); err != nil {
 		t.Fatal(err)
 	}
 	if db.HasVoluntaryExit(ctx, exitRoot) {

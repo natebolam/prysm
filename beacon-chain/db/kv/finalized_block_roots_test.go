@@ -5,19 +5,17 @@ import (
 	"testing"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state"
-	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/testutil"
 )
 
 var genesisBlockRoot = bytesutil.ToBytes32([]byte{'G', 'E', 'N', 'E', 'S', 'I', 'S'})
 
 func TestStore_IsFinalizedBlock(t *testing.T) {
-	slotsPerEpoch := int(params.BeaconConfig().SlotsPerEpoch)
+	slotsPerEpoch := params.BeaconConfig().SlotsPerEpoch
 	db := setupDB(t)
-	defer teardownDB(t, db)
 	ctx := context.Background()
 
 	if err := db.SaveGenesisBlockRoot(ctx, genesisBlockRoot); err != nil {
@@ -29,7 +27,7 @@ func TestStore_IsFinalizedBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root, err := ssz.HashTreeRoot(blks[slotsPerEpoch].Block)
+	root, err := stateutil.BlockRoot(blks[slotsPerEpoch].Block)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,10 +37,7 @@ func TestStore_IsFinalizedBlock(t *testing.T) {
 		Root:  root[:],
 	}
 
-	st, err := state.InitializeFromProto(&pb.BeaconState{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testutil.NewBeaconState()
 	// a state is required to save checkpoint
 	if err := db.SaveState(ctx, st, root); err != nil {
 		t.Fatal(err)
@@ -53,8 +48,8 @@ func TestStore_IsFinalizedBlock(t *testing.T) {
 	}
 
 	// All blocks up to slotsPerEpoch*2 should be in the finalized index.
-	for i := 0; i < slotsPerEpoch*2; i++ {
-		root, err := ssz.HashTreeRoot(blks[i].Block)
+	for i := uint64(0); i < slotsPerEpoch*2; i++ {
+		root, err := stateutil.BlockRoot(blks[i].Block)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -62,14 +57,34 @@ func TestStore_IsFinalizedBlock(t *testing.T) {
 			t.Errorf("Block at index %d was not considered finalized in the index", i)
 		}
 	}
-	for i := slotsPerEpoch * 3; i < len(blks); i++ {
-		root, err := ssz.HashTreeRoot(blks[i].Block)
+	for i := slotsPerEpoch * 3; i < uint64(len(blks)); i++ {
+		root, err := stateutil.BlockRoot(blks[i].Block)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if db.IsFinalizedBlock(ctx, root) {
 			t.Errorf("Block at index %d was considered finalized in the index, but should not have", i)
 		}
+	}
+}
+
+func TestStore_IsFinalizedBlockGenesis(t *testing.T) {
+	db := setupDB(t)
+	ctx := context.Background()
+
+	blk := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: 0}}
+	root, err := stateutil.BlockRoot(blk.Block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveBlock(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveGenesisBlockRoot(ctx, root); err != nil {
+		t.Fatal(err)
+	}
+	if finalized := db.IsFinalizedBlock(ctx, root); !finalized {
+		t.Error("Finalized genesis block doesn't exist in db")
 	}
 }
 
@@ -84,7 +99,7 @@ func TestStore_IsFinalizedBlock(t *testing.T) {
 // be c, e, and g. In this scenario, c was a finalized checkpoint root but no block built upon it so
 // it should not be considered "final and canonical" in the view at slot 6.
 func TestStore_IsFinalized_ForkEdgeCase(t *testing.T) {
-	slotsPerEpoch := int(params.BeaconConfig().SlotsPerEpoch)
+	slotsPerEpoch := params.BeaconConfig().SlotsPerEpoch
 	blocks0 := makeBlocks(t, slotsPerEpoch*0, slotsPerEpoch, genesisBlockRoot)
 	blocks1 := append(
 		makeBlocks(t, slotsPerEpoch*1, 1, bytesutil.ToBytes32(sszRootOrDie(t, blocks0[len(blocks0)-1]))), // No block builds off of the first block in epoch.
@@ -93,7 +108,6 @@ func TestStore_IsFinalized_ForkEdgeCase(t *testing.T) {
 	blocks2 := makeBlocks(t, slotsPerEpoch*2, slotsPerEpoch, bytesutil.ToBytes32(sszRootOrDie(t, blocks1[len(blocks1)-1])))
 
 	db := setupDB(t)
-	defer teardownDB(t, db)
 	ctx := context.Background()
 
 	if err := db.SaveGenesisBlockRoot(ctx, genesisBlockRoot); err != nil {
@@ -115,10 +129,7 @@ func TestStore_IsFinalized_ForkEdgeCase(t *testing.T) {
 		Epoch: 1,
 	}
 
-	st, err := state.InitializeFromProto(&pb.BeaconState{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	st := testutil.NewBeaconState()
 	// A state is required to save checkpoint
 	if err := db.SaveState(ctx, st, bytesutil.ToBytes32(checkpoint1.Root)); err != nil {
 		t.Fatal(err)
@@ -163,26 +174,26 @@ func TestStore_IsFinalized_ForkEdgeCase(t *testing.T) {
 }
 
 func sszRootOrDie(t *testing.T, block *ethpb.SignedBeaconBlock) []byte {
-	root, err := ssz.HashTreeRoot(block.Block)
+	root, err := stateutil.BlockRoot(block.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return root[:]
 }
 
-func makeBlocks(t *testing.T, i, n int, previousRoot [32]byte) []*ethpb.SignedBeaconBlock {
+func makeBlocks(t *testing.T, i, n uint64, previousRoot [32]byte) []*ethpb.SignedBeaconBlock {
 	blocks := make([]*ethpb.SignedBeaconBlock, n)
 	for j := i; j < n+i; j++ {
 		parentRoot := make([]byte, 32)
 		copy(parentRoot, previousRoot[:])
 		blocks[j-i] = &ethpb.SignedBeaconBlock{
 			Block: &ethpb.BeaconBlock{
-				Slot:       uint64(j + 1),
+				Slot:       j + 1,
 				ParentRoot: parentRoot,
 			},
 		}
 		var err error
-		previousRoot, err = ssz.HashTreeRoot(blocks[j-i].Block)
+		previousRoot, err = stateutil.BlockRoot(blocks[j-i].Block)
 		if err != nil {
 			t.Fatal(err)
 		}

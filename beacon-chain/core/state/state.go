@@ -1,6 +1,6 @@
 // Package state implements the whole state transition
-// function which consists of per slot, per-epoch transitions.
-// It also bootstraps the genesis beacon state for slot 0.
+// function which consists of per slot, per-epoch transitions, and
+// bootstrapping the genesis state according to the eth2 spec.
 package state
 
 import (
@@ -12,6 +12,7 @@ import (
 	"github.com/prysmaticlabs/go-ssz"
 	b "github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
@@ -95,12 +96,11 @@ func GenesisBeaconState(deposits []*ethpb.Deposit, genesisTime uint64, eth1Data 
 		return nil, err
 	}
 
-	for i, deposit := range deposits {
-		state, err = b.ProcessPreGenesisDeposit(context.Background(), state, deposit)
-		if err != nil {
-			return nil, errors.Wrapf(err, "could not process validator deposit %d", i)
-		}
+	state, err = b.ProcessPreGenesisDeposits(context.Background(), state, deposits)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not process validator deposits")
 	}
+
 	return OptimizedGenesisBeaconState(genesisTime, state, state.Eth1Data())
 }
 
@@ -137,10 +137,16 @@ func OptimizedGenesisBeaconState(genesisTime uint64, preState *stateTrie.BeaconS
 
 	slashings := make([]uint64, params.BeaconConfig().EpochsPerSlashingsVector)
 
+	genesisValidatorsRoot, err := stateutil.ValidatorRegistryRoot(preState.Validators())
+	if err != nil {
+		return nil, errors.Wrapf(err, "could not hash tree root genesis validators %v", err)
+	}
+
 	state := &pb.BeaconState{
 		// Misc fields.
-		Slot:        0,
-		GenesisTime: genesisTime,
+		Slot:                  0,
+		GenesisTime:           genesisTime,
+		GenesisValidatorsRoot: genesisValidatorsRoot[:],
 
 		Fork: &pb.Fork{
 			PreviousVersion: params.BeaconConfig().GenesisForkVersion,
@@ -183,9 +189,9 @@ func OptimizedGenesisBeaconState(genesisTime uint64, preState *stateTrie.BeaconS
 		Eth1DepositIndex: preState.Eth1DepositIndex(),
 	}
 
-	bodyRoot, err := ssz.HashTreeRoot(&ethpb.BeaconBlockBody{})
+	bodyRoot, err := stateutil.BlockBodyRoot(&ethpb.BeaconBlockBody{})
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not hash tree root %v", bodyRoot)
+		return nil, errors.Wrap(err, "could not hash tree root empty block body")
 	}
 
 	state.LatestBlockHeader = &ethpb.BeaconBlockHeader{

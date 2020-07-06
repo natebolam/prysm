@@ -5,17 +5,18 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"math/rand"
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-bitfield"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bls"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/rand"
 )
 
 // BlockGenConfig is used to define the requested conditions
@@ -40,14 +41,34 @@ func DefaultBlockGenConfig() *BlockGenConfig {
 	}
 }
 
+// NewBeaconBlock creates a beacon block with minimum marshalable fields.
+func NewBeaconBlock() *ethpb.SignedBeaconBlock {
+	return &ethpb.SignedBeaconBlock{
+		Block: &ethpb.BeaconBlock{
+			ParentRoot: make([]byte, 32),
+			StateRoot:  make([]byte, 32),
+			Body: &ethpb.BeaconBlockBody{
+				RandaoReveal: make([]byte, 96),
+				Eth1Data: &ethpb.Eth1Data{
+					DepositRoot: make([]byte, 32),
+					BlockHash:   make([]byte, 32),
+				},
+				Graffiti: make([]byte, 32),
+			},
+		},
+		Signature: make([]byte, 96),
+	}
+}
+
 // GenerateFullBlock generates a fully valid block with the requested parameters.
 // Use BlockGenConfig to declare the conditions you would like the block generated under.
 func GenerateFullBlock(
 	bState *stateTrie.BeaconState,
-	privs []*bls.SecretKey,
+	privs []bls.SecretKey,
 	conf *BlockGenConfig,
 	slot uint64,
 ) (*ethpb.SignedBeaconBlock, error) {
+	ctx := context.Background()
 	currentSlot := bState.Slot()
 	if currentSlot > slot {
 		return nil, fmt.Errorf("current slot in state is larger than given slot. %d > %d", currentSlot, slot)
@@ -105,12 +126,12 @@ func GenerateFullBlock(
 	}
 
 	newHeader := bState.LatestBlockHeader()
-	prevStateRoot, err := bState.HashTreeRoot()
+	prevStateRoot, err := bState.HashTreeRoot(ctx)
 	if err != nil {
 		return nil, err
 	}
 	newHeader.StateRoot = prevStateRoot[:]
-	parentRoot, err := ssz.HashTreeRoot(newHeader)
+	parentRoot, err := stateutil.BlockHeaderRoot(newHeader)
 	if err != nil {
 		return nil, err
 	}
@@ -129,9 +150,15 @@ func GenerateFullBlock(
 		return nil, err
 	}
 
+	idx, err := helpers.BeaconProposerIndex(bState)
+	if err != nil {
+		return nil, err
+	}
+
 	block := &ethpb.BeaconBlock{
-		Slot:       slot,
-		ParentRoot: parentRoot[:],
+		Slot:          slot,
+		ParentRoot:    parentRoot[:],
+		ProposerIndex: idx,
 		Body: &ethpb.BeaconBlockBody{
 			Eth1Data:          eth1Data,
 			RandaoReveal:      reveal,
@@ -157,45 +184,53 @@ func GenerateFullBlock(
 // GenerateProposerSlashingForValidator for a specific validator index.
 func GenerateProposerSlashingForValidator(
 	bState *stateTrie.BeaconState,
-	priv *bls.SecretKey,
+	priv bls.SecretKey,
 	idx uint64,
 ) (*ethpb.ProposerSlashing, error) {
 	header1 := &ethpb.SignedBeaconBlockHeader{
 		Header: &ethpb.BeaconBlockHeader{
-			Slot:     bState.Slot(),
-			BodyRoot: []byte{0, 1, 0},
+			ProposerIndex: idx,
+			Slot:          bState.Slot(),
+			BodyRoot:      bytesutil.PadTo([]byte{0, 1, 0}, 32),
+			StateRoot:     make([]byte, 32),
+			ParentRoot:    make([]byte, 32),
 		},
 	}
-	root, err := ssz.HashTreeRoot(header1.Header)
+	currentEpoch := helpers.CurrentEpoch(bState)
+	domain, err := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconProposer, bState.GenesisValidatorRoot())
 	if err != nil {
 		return nil, err
 	}
-	currentEpoch := helpers.CurrentEpoch(bState)
-	domain := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconProposer)
-	header1.Signature = priv.Sign(root[:], domain).Marshal()
+	root, err := helpers.ComputeSigningRoot(header1.Header, domain)
+	if err != nil {
+		return nil, err
+	}
+	header1.Signature = priv.Sign(root[:]).Marshal()
 
 	header2 := &ethpb.SignedBeaconBlockHeader{
 		Header: &ethpb.BeaconBlockHeader{
-			Slot:     bState.Slot(),
-			BodyRoot: []byte{0, 2, 0},
+			ProposerIndex: idx,
+			Slot:          bState.Slot(),
+			BodyRoot:      bytesutil.PadTo([]byte{0, 2, 0}, 32),
+			StateRoot:     make([]byte, 32),
+			ParentRoot:    make([]byte, 32),
 		},
 	}
-	root, err = ssz.HashTreeRoot(header2.Header)
+	root, err = helpers.ComputeSigningRoot(header2.Header, domain)
 	if err != nil {
 		return nil, err
 	}
-	header2.Signature = priv.Sign(root[:], domain).Marshal()
+	header2.Signature = priv.Sign(root[:]).Marshal()
 
 	return &ethpb.ProposerSlashing{
-		ProposerIndex: idx,
-		Header_1:      header1,
-		Header_2:      header2,
+		Header_1: header1,
+		Header_2: header2,
 	}, nil
 }
 
 func generateProposerSlashings(
 	bState *stateTrie.BeaconState,
-	privs []*bls.SecretKey,
+	privs []bls.SecretKey,
 	numSlashings uint64,
 ) ([]*ethpb.ProposerSlashing, error) {
 	proposerSlashings := make([]*ethpb.ProposerSlashing, numSlashings)
@@ -216,7 +251,7 @@ func generateProposerSlashings(
 // GenerateAttesterSlashingForValidator for a specific validator index.
 func GenerateAttesterSlashingForValidator(
 	bState *stateTrie.BeaconState,
-	priv *bls.SecretKey,
+	priv bls.SecretKey,
 	idx uint64,
 ) (*ethpb.AttesterSlashing, error) {
 	currentEpoch := helpers.CurrentEpoch(bState)
@@ -236,13 +271,16 @@ func GenerateAttesterSlashingForValidator(
 		},
 		AttestingIndices: []uint64{idx},
 	}
-	dataRoot, err := ssz.HashTreeRoot(att1.Data)
+	domain, err := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconAttester, bState.GenesisValidatorRoot())
 	if err != nil {
 		return nil, err
 	}
-	domain := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconAttester)
-	sig := priv.Sign(dataRoot[:], domain)
-	att1.Signature = bls.AggregateSignatures([]*bls.Signature{sig}).Marshal()
+	dataRoot, err := helpers.ComputeSigningRoot(att1.Data, domain)
+	if err != nil {
+		return nil, err
+	}
+	sig := priv.Sign(dataRoot[:])
+	att1.Signature = bls.AggregateSignatures([]bls.Signature{sig}).Marshal()
 
 	att2 := &ethpb.IndexedAttestation{
 		Data: &ethpb.AttestationData{
@@ -259,12 +297,12 @@ func GenerateAttesterSlashingForValidator(
 		},
 		AttestingIndices: []uint64{idx},
 	}
-	dataRoot, err = ssz.HashTreeRoot(att2.Data)
+	dataRoot, err = helpers.ComputeSigningRoot(att2.Data, domain)
 	if err != nil {
 		return nil, err
 	}
-	sig = priv.Sign(dataRoot[:], domain)
-	att2.Signature = bls.AggregateSignatures([]*bls.Signature{sig}).Marshal()
+	sig = priv.Sign(dataRoot[:])
+	att2.Signature = bls.AggregateSignatures([]bls.Signature{sig}).Marshal()
 
 	return &ethpb.AttesterSlashing{
 		Attestation_1: att1,
@@ -274,17 +312,18 @@ func GenerateAttesterSlashingForValidator(
 
 func generateAttesterSlashings(
 	bState *stateTrie.BeaconState,
-	privs []*bls.SecretKey,
+	privs []bls.SecretKey,
 	numSlashings uint64,
 ) ([]*ethpb.AttesterSlashing, error) {
 	attesterSlashings := make([]*ethpb.AttesterSlashing, numSlashings)
+	randGen := rand.NewDeterministicGenerator()
 	for i := uint64(0); i < numSlashings; i++ {
-		committeeIndex := rand.Uint64() % params.BeaconConfig().MaxCommitteesPerSlot
+		committeeIndex := randGen.Uint64() % params.BeaconConfig().MaxCommitteesPerSlot
 		committee, err := helpers.BeaconCommitteeFromState(bState, bState.Slot(), committeeIndex)
 		if err != nil {
 			return nil, err
 		}
-		randIndex := rand.Uint64() % uint64(len(committee))
+		randIndex := randGen.Uint64() % uint64(len(committee))
 		valIndex := committee[randIndex]
 		slashing, err := GenerateAttesterSlashingForValidator(bState, privs[valIndex], valIndex)
 		if err != nil {
@@ -302,7 +341,7 @@ func generateAttesterSlashings(
 // for the same data with their aggregation bits split uniformly.
 //
 // If you request 4 attestations, but there are 8 committees, you will get 4 fully aggregated attestations.
-func GenerateAttestations(bState *stateTrie.BeaconState, privs []*bls.SecretKey, numToGen uint64, slot uint64, randomRoot bool) ([]*ethpb.Attestation, error) {
+func GenerateAttestations(bState *stateTrie.BeaconState, privs []bls.SecretKey, numToGen uint64, slot uint64, randomRoot bool) ([]*ethpb.Attestation, error) {
 	currentEpoch := helpers.SlotToEpoch(slot)
 	attestations := []*ethpb.Attestation{}
 	generateHeadState := false
@@ -341,8 +380,9 @@ func GenerateAttestations(bState *stateTrie.BeaconState, privs []*bls.SecretKey,
 		}
 	}
 	if randomRoot {
+		randGen := rand.NewDeterministicGenerator()
 		b := make([]byte, 32)
-		_, err := rand.Read(b)
+		_, err := randGen.Read(b)
 		if err != nil {
 			return nil, err
 		}
@@ -379,8 +419,10 @@ func GenerateAttestations(bState *stateTrie.BeaconState, privs []*bls.SecretKey,
 		)
 	}
 
-	domain := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconAttester)
-	fmt.Printf("Justified: %d\n", bState.CurrentJustifiedCheckpoint().Epoch)
+	domain, err := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainBeaconAttester, bState.GenesisValidatorRoot())
+	if err != nil {
+		return nil, err
+	}
 	for c := uint64(0); c < committeesPerSlot && c < numToGen; c++ {
 		committee, err := helpers.BeaconCommitteeFromState(bState, slot, c)
 		if err != nil {
@@ -398,7 +440,7 @@ func GenerateAttestations(bState *stateTrie.BeaconState, privs []*bls.SecretKey,
 			},
 		}
 
-		dataRoot, err := ssz.HashTreeRoot(attData)
+		dataRoot, err := helpers.ComputeSigningRoot(attData, domain)
 		if err != nil {
 			return nil, err
 		}
@@ -407,10 +449,10 @@ func GenerateAttestations(bState *stateTrie.BeaconState, privs []*bls.SecretKey,
 		bitsPerAtt := committeeSize / uint64(attsPerCommittee)
 		for i := uint64(0); i < committeeSize; i += bitsPerAtt {
 			aggregationBits := bitfield.NewBitlist(committeeSize)
-			sigs := []*bls.Signature{}
+			sigs := []bls.Signature{}
 			for b := i; b < i+bitsPerAtt; b++ {
 				aggregationBits.SetBitAt(b, true)
-				sigs = append(sigs, privs[committee[b]].Sign(dataRoot[:], domain))
+				sigs = append(sigs, privs[committee[b]].Sign(dataRoot[:]))
 			}
 
 			// bls.AggregateSignatures will return nil if sigs is 0.
@@ -451,7 +493,7 @@ func generateDepositsAndEth1Data(
 
 func generateVoluntaryExits(
 	bState *stateTrie.BeaconState,
-	privs []*bls.SecretKey,
+	privs []bls.SecretKey,
 	numExits uint64,
 ) ([]*ethpb.SignedVoluntaryExit, error) {
 	currentEpoch := helpers.CurrentEpoch(bState)
@@ -468,12 +510,15 @@ func generateVoluntaryExits(
 				ValidatorIndex: valIndex,
 			},
 		}
-		root, err := ssz.HashTreeRoot(exit.Exit)
+		domain, err := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainVoluntaryExit, bState.GenesisValidatorRoot())
 		if err != nil {
 			return nil, err
 		}
-		domain := helpers.Domain(bState.Fork(), currentEpoch, params.BeaconConfig().DomainVoluntaryExit)
-		exit.Signature = privs[valIndex].Sign(root[:], domain).Marshal()
+		root, err := helpers.ComputeSigningRoot(exit.Exit, domain)
+		if err != nil {
+			return nil, err
+		}
+		exit.Signature = privs[valIndex].Sign(root[:]).Marshal()
 		voluntaryExits[i] = exit
 	}
 	return voluntaryExits, nil
@@ -484,5 +529,5 @@ func randValIndex(bState *stateTrie.BeaconState) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return rand.Uint64() % activeCount, nil
+	return rand.NewGenerator().Uint64() % activeCount, nil
 }

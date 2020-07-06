@@ -1,3 +1,5 @@
+// Package kafka defines an implementation of Database interface
+// which exports streaming data using Kafka for data analysis.
 package kafka
 
 import (
@@ -14,6 +16,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
 	"gopkg.in/confluentinc/confluent-kafka-go.v1/kafka"
+	_ "gopkg.in/confluentinc/confluent-kafka-go.v1/kafka/librdkafka" // Required for c++ kafka library.
 )
 
 var _ = iface.Database(&Exporter{})
@@ -30,6 +33,7 @@ type Exporter struct {
 // the database, but returns the underlying database pointer itself.
 func Wrap(db iface.Database) (iface.Database, error) {
 	if featureconfig.Get().KafkaBootstrapServers == "" {
+		log.Debug("Empty Kafka bootstrap servers list, database was not wrapped with Kafka exporter")
 		return db, nil
 	}
 

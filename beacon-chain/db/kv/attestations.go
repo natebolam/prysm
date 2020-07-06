@@ -4,30 +4,31 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/boltdb/bolt"
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db/filters"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	dbpb "github.com/prysmaticlabs/prysm/proto/beacon/db"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
 	"github.com/prysmaticlabs/prysm/shared/traceutil"
+	bolt "go.etcd.io/bbolt"
 	"go.opencensus.io/trace"
 )
 
 // AttestationsByDataRoot returns any (aggregated) attestations matching this data root.
-func (k *Store) AttestationsByDataRoot(ctx context.Context, attDataRoot [32]byte) ([]*ethpb.Attestation, error) {
+func (kv *Store) AttestationsByDataRoot(ctx context.Context, attDataRoot [32]byte) ([]*ethpb.Attestation, error) {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.Attestation")
 	defer span.End()
 	var atts []*ethpb.Attestation
-	err := k.db.View(func(tx *bolt.Tx) error {
+	err := kv.db.View(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(attestationsBucket)
 		enc := bkt.Get(attDataRoot[:])
 		if enc == nil {
 			return nil
 		}
 		ac := &dbpb.AttestationContainer{}
-		if err := decode(enc, ac); err != nil {
+		if err := decode(ctx, enc, ac); err != nil {
 			return err
 		}
 		atts = ac.ToAttestations()
@@ -40,11 +41,11 @@ func (k *Store) AttestationsByDataRoot(ctx context.Context, attDataRoot [32]byte
 }
 
 // Attestations retrieves a list of attestations by filter criteria.
-func (k *Store) Attestations(ctx context.Context, f *filters.QueryFilter) ([]*ethpb.Attestation, error) {
+func (kv *Store) Attestations(ctx context.Context, f *filters.QueryFilter) ([]*ethpb.Attestation, error) {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.Attestations")
 	defer span.End()
 	atts := make([]*ethpb.Attestation, 0)
-	err := k.db.View(func(tx *bolt.Tx) error {
+	err := kv.db.View(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(attestationsBucket)
 
 		// If no filter criteria are specified, return an error.
@@ -55,7 +56,7 @@ func (k *Store) Attestations(ctx context.Context, f *filters.QueryFilter) ([]*et
 		// Creates a list of indices from the passed in filter values, such as:
 		// []byte("parent-root-0x2093923"), etc. to be used for looking up
 		// block roots that were stored under each of those indices for O(1) lookup.
-		indicesByBucket, err := createAttestationIndicesFromFilters(f)
+		indicesByBucket, err := createAttestationIndicesFromFilters(ctx, f)
 		if err != nil {
 			return errors.Wrap(err, "could not determine lookup indices")
 		}
@@ -63,11 +64,11 @@ func (k *Store) Attestations(ctx context.Context, f *filters.QueryFilter) ([]*et
 		// lookup index, we find the intersection across all of them and use
 		// that list of roots to lookup the attestations. These attestations will
 		// meet the filter criteria.
-		keys := sliceutil.IntersectionByteSlices(lookupValuesForIndices(indicesByBucket, tx)...)
+		keys := sliceutil.IntersectionByteSlices(lookupValuesForIndices(ctx, indicesByBucket, tx)...)
 		for i := 0; i < len(keys); i++ {
 			encoded := bkt.Get(keys[i])
 			ac := &dbpb.AttestationContainer{}
-			if err := decode(encoded, ac); err != nil {
+			if err := decode(ctx, encoded, ac); err != nil {
 				return err
 			}
 			atts = append(atts, ac.ToAttestations()...)
@@ -78,56 +79,45 @@ func (k *Store) Attestations(ctx context.Context, f *filters.QueryFilter) ([]*et
 }
 
 // HasAttestation checks if an attestation by its attestation data root exists in the db.
-func (k *Store) HasAttestation(ctx context.Context, attDataRoot [32]byte) bool {
+func (kv *Store) HasAttestation(ctx context.Context, attDataRoot [32]byte) bool {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.HasAttestation")
 	defer span.End()
 	exists := false
-	// #nosec G104. Always returns nil.
-	k.db.View(func(tx *bolt.Tx) error {
+	if err := kv.db.View(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(attestationsBucket)
 		exists = bkt.Get(attDataRoot[:]) != nil
 		return nil
-	})
+	}); err != nil { // This view never returns an error, but we'll handle anyway for sanity.
+		panic(err)
+	}
 	return exists
 }
 
 // DeleteAttestation by attestation data root.
-func (k *Store) DeleteAttestation(ctx context.Context, attDataRoot [32]byte) error {
+func (kv *Store) DeleteAttestation(ctx context.Context, attDataRoot [32]byte) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.DeleteAttestation")
 	defer span.End()
-	return k.db.Update(func(tx *bolt.Tx) error {
-		bkt := tx.Bucket(attestationsBucket)
-		enc := bkt.Get(attDataRoot[:])
-		if enc == nil {
-			return nil
-		}
-		ac := &dbpb.AttestationContainer{}
-		if err := decode(enc, ac); err != nil {
-			return err
-		}
-		indicesByBucket := createAttestationIndicesFromData(ac.Data)
-		if err := deleteValueForIndices(indicesByBucket, attDataRoot[:], tx); err != nil {
-			return errors.Wrap(err, "could not delete root for DB indices")
-		}
-		return bkt.Delete(attDataRoot[:])
-	})
+	return kv.DeleteAttestations(ctx, [][32]byte{attDataRoot})
 }
 
 // DeleteAttestations by attestation data roots.
-func (k *Store) DeleteAttestations(ctx context.Context, attDataRoots [][32]byte) error {
+func (kv *Store) DeleteAttestations(ctx context.Context, attDataRoots [][32]byte) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.DeleteAttestations")
 	defer span.End()
 
-	return k.db.Update(func(tx *bolt.Tx) error {
+	return kv.db.Update(func(tx *bolt.Tx) error {
 		bkt := tx.Bucket(attestationsBucket)
 		for _, attDataRoot := range attDataRoots {
 			enc := bkt.Get(attDataRoot[:])
+			if enc == nil {
+				continue
+			}
 			ac := &dbpb.AttestationContainer{}
-			if err := decode(enc, ac); err != nil {
+			if err := decode(ctx, enc, ac); err != nil {
 				return err
 			}
-			indicesByBucket := createAttestationIndicesFromData(ac.Data)
-			if err := deleteValueForIndices(indicesByBucket, attDataRoot[:], tx); err != nil {
+			indicesByBucket := createAttestationIndicesFromData(ctx, ac.Data)
+			if err := deleteValueForIndices(ctx, indicesByBucket, attDataRoot[:], tx); err != nil {
 				return errors.Wrap(err, "could not delete root for DB indices")
 			}
 			if err := bkt.Delete(attDataRoot[:]); err != nil {
@@ -139,86 +129,52 @@ func (k *Store) DeleteAttestations(ctx context.Context, attDataRoots [][32]byte)
 }
 
 // SaveAttestation to the db.
-func (k *Store) SaveAttestation(ctx context.Context, att *ethpb.Attestation) error {
+func (kv *Store) SaveAttestation(ctx context.Context, att *ethpb.Attestation) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.SaveAttestation")
 	defer span.End()
 
-	// Aggregation bits are required to store attestations within the attestation container. Missing
-	// this field may cause silent failures or unexpected results.
-	if att.AggregationBits == nil {
-		err := errors.New("attestation has nil aggregation bitlist")
-		traceutil.AnnotateError(span, err)
-		return err
-	}
-
-	err := k.db.Update(func(tx *bolt.Tx) error {
-		attDataRoot, err := ssz.HashTreeRoot(att.Data)
-		if err != nil {
-			return err
-		}
-
-		bkt := tx.Bucket(attestationsBucket)
-		ac := &dbpb.AttestationContainer{
-			Data: att.Data,
-		}
-		existingEnc := bkt.Get(attDataRoot[:])
-		if existingEnc != nil {
-			if err := decode(existingEnc, ac); err != nil {
-				return err
-			}
-		}
-
-		ac.InsertAttestation(att)
-
-		enc, err := encode(ac)
-		if err != nil {
-			return err
-		}
-
-		indicesByBucket := createAttestationIndicesFromData(att.Data)
-		if err := updateValueForIndices(indicesByBucket, attDataRoot[:], tx); err != nil {
-			return errors.Wrap(err, "could not update DB indices")
-		}
-		return bkt.Put(attDataRoot[:], enc)
-	})
-	if err != nil {
-		traceutil.AnnotateError(span, err)
-	}
-	return err
+	return kv.SaveAttestations(ctx, []*ethpb.Attestation{att})
 }
 
 // SaveAttestations via batch updates to the db.
-func (k *Store) SaveAttestations(ctx context.Context, atts []*ethpb.Attestation) error {
+func (kv *Store) SaveAttestations(ctx context.Context, atts []*ethpb.Attestation) error {
 	ctx, span := trace.StartSpan(ctx, "BeaconDB.SaveAttestations")
 	defer span.End()
 
-	err := k.db.Update(func(tx *bolt.Tx) error {
+	err := kv.db.Update(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(attestationsBucket)
 		for _, att := range atts {
-			attDataRoot, err := ssz.HashTreeRoot(att.Data)
+			// Aggregation bits are required to store attestations within the attestation container. Missing
+			// this field may cause silent failures or unexpected results.
+			if att.AggregationBits == nil {
+				traceutil.AnnotateError(span, errors.New("attestation has nil aggregation bitlist"))
+				continue
+			}
+
+			attDataRoot, err := stateutil.AttestationDataRoot(att.Data)
 			if err != nil {
 				return err
 			}
 
-			bkt := tx.Bucket(attestationsBucket)
 			ac := &dbpb.AttestationContainer{
 				Data: att.Data,
 			}
 			existingEnc := bkt.Get(attDataRoot[:])
 			if existingEnc != nil {
-				if err := decode(existingEnc, ac); err != nil {
+				if err := decode(ctx, existingEnc, ac); err != nil {
 					return err
 				}
 			}
 
 			ac.InsertAttestation(att)
 
-			enc, err := encode(ac)
+			enc, err := encode(ctx, ac)
 			if err != nil {
 				return err
 			}
 
-			indicesByBucket := createAttestationIndicesFromData(att.Data)
-			if err := updateValueForIndices(indicesByBucket, attDataRoot[:], tx); err != nil {
+			indicesByBucket := createAttestationIndicesFromData(ctx, att.Data)
+			if err := updateValueForIndices(ctx, indicesByBucket, attDataRoot[:], tx); err != nil {
 				return errors.Wrap(err, "could not update DB indices")
 			}
 
@@ -238,13 +194,16 @@ func (k *Store) SaveAttestations(ctx context.Context, atts []*ethpb.Attestation)
 // createAttestationIndicesFromData takes in attestation data and returns
 // a map of bolt DB index buckets corresponding to each particular key for indices for
 // data, such as (shard indices bucket -> shard 5).
-func createAttestationIndicesFromData(attData *ethpb.AttestationData) map[string][]byte {
+func createAttestationIndicesFromData(ctx context.Context, attData *ethpb.AttestationData) map[string][]byte {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB.createAttestationIndicesFromData")
+	defer span.End()
+
 	indicesByBucket := make(map[string][]byte)
 	buckets := make([][]byte, 0)
 	indices := make([][]byte, 0)
 	if attData.Source != nil {
 		buckets = append(buckets, attestationSourceEpochIndicesBucket)
-		indices = append(indices, uint64ToBytes(attData.Source.Epoch))
+		indices = append(indices, bytesutil.Uint64ToBytes(attData.Source.Epoch))
 		if attData.Source.Root != nil && len(attData.Source.Root) > 0 {
 			buckets = append(buckets, attestationSourceRootIndicesBucket)
 			indices = append(indices, attData.Source.Root)
@@ -252,7 +211,7 @@ func createAttestationIndicesFromData(attData *ethpb.AttestationData) map[string
 	}
 	if attData.Target != nil {
 		buckets = append(buckets, attestationTargetEpochIndicesBucket)
-		indices = append(indices, uint64ToBytes(attData.Target.Epoch))
+		indices = append(indices, bytesutil.Uint64ToBytes(attData.Target.Epoch))
 		if attData.Target.Root != nil && len(attData.Target.Root) > 0 {
 			buckets = append(buckets, attestationTargetRootIndicesBucket)
 			indices = append(indices, attData.Target.Root)
@@ -275,24 +234,42 @@ func createAttestationIndicesFromData(attData *ethpb.AttestationData) map[string
 // For attestations, these are list of hash tree roots of attestation.Data
 // objects. If a certain filter criterion does not apply to
 // attestations, an appropriate error is returned.
-func createAttestationIndicesFromFilters(f *filters.QueryFilter) (map[string][]byte, error) {
+func createAttestationIndicesFromFilters(ctx context.Context, f *filters.QueryFilter) (map[string][]byte, error) {
+	ctx, span := trace.StartSpan(ctx, "BeaconDB.createAttestationIndicesFromFilters")
+	defer span.End()
+
 	indicesByBucket := make(map[string][]byte)
 	for k, v := range f.Filters() {
 		switch k {
 		case filters.HeadBlockRoot:
-			headBlockRoot := v.([]byte)
+			headBlockRoot, ok := v.([]byte)
+			if !ok {
+				return nil, errors.New("headBlockRoot is not type []byte")
+			}
 			indicesByBucket[string(attestationHeadBlockRootBucket)] = headBlockRoot
 		case filters.SourceRoot:
-			sourceRoot := v.([]byte)
+			sourceRoot, ok := v.([]byte)
+			if !ok {
+				return nil, errors.New("sourceRoot is not type []byte")
+			}
 			indicesByBucket[string(attestationSourceRootIndicesBucket)] = sourceRoot
 		case filters.SourceEpoch:
-			sourceEpoch := v.(uint64)
-			indicesByBucket[string(attestationSourceEpochIndicesBucket)] = uint64ToBytes(sourceEpoch)
+			sourceEpoch, ok := v.(uint64)
+			if !ok {
+				return nil, errors.New("sourceEpoch is not type uint64")
+			}
+			indicesByBucket[string(attestationSourceEpochIndicesBucket)] = bytesutil.Uint64ToBytes(sourceEpoch)
 		case filters.TargetEpoch:
-			targetEpoch := v.(uint64)
-			indicesByBucket[string(attestationTargetEpochIndicesBucket)] = uint64ToBytes(targetEpoch)
+			targetEpoch, ok := v.(uint64)
+			if !ok {
+				return nil, errors.New("targetEpoch is not type uint64")
+			}
+			indicesByBucket[string(attestationTargetEpochIndicesBucket)] = bytesutil.Uint64ToBytes(targetEpoch)
 		case filters.TargetRoot:
-			targetRoot := v.([]byte)
+			targetRoot, ok := v.([]byte)
+			if !ok {
+				return nil, errors.New("targetRoot is not type []byte")
+			}
 			indicesByBucket[string(attestationTargetRootIndicesBucket)] = targetRoot
 		default:
 			return nil, fmt.Errorf("filter criterion %v not supported for attestations", k)

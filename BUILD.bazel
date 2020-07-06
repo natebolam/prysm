@@ -4,7 +4,7 @@ load("@com_github_atlassian_bazel_tools//goimports:def.bzl", "goimports")
 load("@io_kubernetes_build//defs:run_in_workspace.bzl", "workspace_binary")
 load("@io_bazel_rules_go//go:def.bzl", "nogo")
 load("@graknlabs_bazel_distribution//common:rules.bzl", "assemble_targz", "assemble_versioned")
-load("//tools:binary_targets.bzl", "binary_targets", "determine_targets")
+load("@bazel_skylib//rules:common_settings.bzl", "string_setting")
 
 prefix = "github.com/prysmaticlabs/prysm"
 
@@ -13,6 +13,8 @@ exports_files([
 ])
 
 # gazelle:prefix github.com/prysmaticlabs/prysm
+# gazelle:map_kind go_library go_library @prysm//tools/go:def.bzl
+# gazelle:map_kind go_repository go_repository @prysm//tools/go:def.bzl
 gazelle(
     name = "gazelle",
     prefix = prefix,
@@ -44,7 +46,7 @@ alias(
 # Protobuf gRPC gateway compiler
 alias(
     name = "grpc_gateway_proto_compiler",
-    actual = "@grpc_ecosystem_grpc_gateway//protoc-gen-grpc-gateway:go_gen_grpc_gateway",
+    actual = "@com_github_grpc_ecosystem_grpc_gateway//protoc-gen-grpc-gateway:go_gen_grpc_gateway",
     visibility = ["//visibility:public"],
 )
 
@@ -86,15 +88,12 @@ nogo(
         "@org_golang_x_tools//go/analysis/passes/pkgfact:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/nilness:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/nilfunc:go_tool_library",
-        # lost cancel ignore doesn't seem to work when running with coverage
-        #"@org_golang_x_tools//go/analysis/passes/lostcancel:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/loopclosure:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/httpresponse:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/findcall:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/deepequalerrors:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/ctrlflow:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/copylock:go_tool_library",
-        "@org_golang_x_tools//go/analysis/passes/composite:go_tool_library",
         #  "@org_golang_x_tools//go/analysis/passes/cgocall:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/buildtag:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/buildssa:go_tool_library",
@@ -104,20 +103,24 @@ nogo(
         "@org_golang_x_tools//go/analysis/passes/assign:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/inspect:go_tool_library",
         "@org_golang_x_tools//go/analysis/passes/asmdecl:go_tool_library",
-    ],
+        "//tools/analyzers/maligned:go_tool_library",
+        "//tools/analyzers/roughtime:go_tool_library",
+        "//tools/analyzers/cryptorand:go_tool_library",
+        "//tools/analyzers/errcheck:go_tool_library",
+        "//tools/analyzers/featureconfig:go_tool_library",
+    ] + select({
+        # nogo checks that fail with coverage enabled.
+        ":coverage_enabled": [],
+        "//conditions:default": [
+            "@org_golang_x_tools//go/analysis/passes/lostcancel:go_tool_library",
+            "@org_golang_x_tools//go/analysis/passes/composite:go_tool_library",
+        ],
+    }),
 )
 
-assemble_versioned(
-    name = "assemble-versioned-all",
-    tags = ["manual"],
-    targets = [
-        ":assemble-{}-{}-targz".format(
-            pair[0],
-            pair[1],
-        )
-        for pair in binary_targets
-    ],
-    version_file = "//:VERSION",
+config_setting(
+    name = "coverage_enabled",
+    values = {"define": "coverage_enabled=1"},
 )
 
 common_files = {
@@ -125,21 +128,17 @@ common_files = {
     "//:README.md": "README.md",
 }
 
-[assemble_targz(
-    name = "assemble-{}-{}-targz".format(
-        pair[0],
-        pair[1],
-    ),
-    additional_files = determine_targets(pair, common_files),
-    output_filename = "prysm-{}-{}".format(
-        pair[0],
-        pair[1],
-    ),
-    tags = ["manual"],
-) for pair in binary_targets]
-
 toolchain(
     name = "built_cmake_toolchain",
     toolchain = "@rules_foreign_cc//tools/build_defs/native_tools:built_cmake",
     toolchain_type = "@rules_foreign_cc//tools/build_defs:cmake_toolchain",
+)
+
+string_setting(
+    name = "gotags",
+    build_setting_default = "",
+    values = [
+        "",
+        "libfuzzer",
+    ],
 )

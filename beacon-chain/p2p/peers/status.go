@@ -1,4 +1,4 @@
-// Package peers provides information about peers at the Ethereum protocol level.
+// Package peers provides information about peers at the eth2 protocol level.
 // "Protocol level" is the level above the network level, so this layer never sees or interacts with (for example) hosts that are
 // uncontactable due to being down, firewalled, etc.  Instead, this works with peers that are contactable but may or may not be of
 // the correct fork version, not currently required due to the number of current connections, etc.
@@ -25,27 +25,30 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/gogo/protobuf/proto"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	ma "github.com/multiformats/go-multiaddr"
+	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/go-bitfield"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
-	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/roughtime"
 )
 
 // PeerConnectionState is the state of the connection.
-type PeerConnectionState int
+type PeerConnectionState ethpb.ConnectionState
 
 const (
 	// PeerDisconnected means there is no connection to the peer.
 	PeerDisconnected PeerConnectionState = iota
-	// PeerConnecting means there is an on-going attempt to connect to the peer.
-	PeerConnecting
-	// PeerConnected means the peer has an active connection.
-	PeerConnected
 	// PeerDisconnecting means there is an on-going attempt to disconnect from the peer.
 	PeerDisconnecting
+	// PeerConnected means the peer has an active connection.
+	PeerConnected
+	// PeerConnecting means there is an on-going attempt to connect to the peer.
+	PeerConnecting
 )
 
 var (
@@ -66,6 +69,8 @@ type peerStatus struct {
 	direction             network.Direction
 	peerState             PeerConnectionState
 	chainState            *pb.Status
+	enr                   *enr.Record
+	metaData              *pb.MetaData
 	chainStateLastUpdated time.Time
 	badResponses          int
 }
@@ -85,7 +90,7 @@ func (p *Status) MaxBadResponses() int {
 
 // Add adds a peer.
 // If a peer already exists with this ID its address and direction are updated with the supplied data.
-func (p *Status) Add(pid peer.ID, address ma.Multiaddr, direction network.Direction) {
+func (p *Status) Add(record *enr.Record, pid peer.ID, address ma.Multiaddr, direction network.Direction) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 
@@ -93,15 +98,21 @@ func (p *Status) Add(pid peer.ID, address ma.Multiaddr, direction network.Direct
 		// Peer already exists, just update its address info.
 		status.address = address
 		status.direction = direction
+		if record != nil {
+			status.enr = record
+		}
 		return
 	}
-
-	p.status[pid] = &peerStatus{
+	status := &peerStatus{
 		address:   address,
 		direction: direction,
 		// Peers start disconnected; state will be updated when the handshake process begins.
 		peerState: PeerDisconnected,
 	}
+	if record != nil {
+		status.enr = record
+	}
+	p.status[pid] = status
 }
 
 // Address returns the multiaddress of the given remote peer.
@@ -128,6 +139,17 @@ func (p *Status) Direction(pid peer.ID) (network.Direction, error) {
 	return network.DirUnknown, ErrPeerUnknown
 }
 
+// ENR returns the enr for the corresponding peer id.
+func (p *Status) ENR(pid peer.ID) (*enr.Record, error) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	if status, ok := p.status[pid]; ok {
+		return status.enr, nil
+	}
+	return nil, ErrPeerUnknown
+}
+
 // SetChainState sets the chain state of the given remote peer.
 func (p *Status) SetChainState(pid peer.ID, chainState *pb.Status) {
 	p.lock.Lock()
@@ -149,6 +171,73 @@ func (p *Status) ChainState(pid peer.ID) (*pb.Status, error) {
 		return status.chainState, nil
 	}
 	return nil, ErrPeerUnknown
+}
+
+// IsActive checks if a peers is active and returns the result appropriately.
+func (p *Status) IsActive(pid peer.ID) bool {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	status, ok := p.status[pid]
+	return ok && (status.peerState == PeerConnected || status.peerState == PeerConnecting)
+}
+
+// SetMetadata sets the metadata of the given remote peer.
+func (p *Status) SetMetadata(pid peer.ID, metaData *pb.MetaData) {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	status := p.fetch(pid)
+	status.metaData = metaData
+}
+
+// Metadata returns a copy of the metadata corresponding to the provided
+// peer id.
+func (p *Status) Metadata(pid peer.ID) (*pb.MetaData, error) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	if status, ok := p.status[pid]; ok {
+		return proto.Clone(status.metaData).(*pb.MetaData), nil
+	}
+	return nil, ErrPeerUnknown
+}
+
+// CommitteeIndices retrieves the committee subnets the peer is subscribed to.
+func (p *Status) CommitteeIndices(pid peer.ID) ([]uint64, error) {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	if status, ok := p.status[pid]; ok {
+		if status.enr == nil || status.metaData == nil {
+			return []uint64{}, nil
+		}
+		return retrieveIndicesFromBitfield(status.metaData.Attnets), nil
+	}
+	return nil, ErrPeerUnknown
+}
+
+// SubscribedToSubnet retrieves the peers subscribed to the given
+// committee subnet.
+func (p *Status) SubscribedToSubnet(index uint64) []peer.ID {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+
+	peers := make([]peer.ID, 0)
+	for pid, status := range p.status {
+		// look at active peers
+		connectedStatus := status.peerState == PeerConnecting || status.peerState == PeerConnected
+		if connectedStatus && status.metaData != nil && status.metaData.Attnets != nil {
+			indices := retrieveIndicesFromBitfield(status.metaData.Attnets)
+			for _, idx := range indices {
+				if idx == index {
+					peers = append(peers, pid)
+					break
+				}
+			}
+		}
+	}
+	return peers
 }
 
 // SetConnectionState sets the connection state of the given remote peer.
@@ -337,42 +426,38 @@ func (p *Status) Decay() {
 // Ideally, all peers would be reporting the same finalized epoch but some may be behind due to their own latency, or because of
 // their finalized epoch at the time we queried them.
 // Returns the best finalized root, epoch number, and list of peers that are at or beyond that epoch.
-func (p *Status) BestFinalized(maxPeers int, ourFinalizedEpoch uint64) ([]byte, uint64, []peer.ID) {
+func (p *Status) BestFinalized(maxPeers int, ourFinalizedEpoch uint64) (uint64, []peer.ID) {
 	connected := p.Connected()
-	finalized := make(map[[32]byte]uint64)
-	rootToEpoch := make(map[[32]byte]uint64)
-	pidEpochs := make(map[peer.ID]uint64)
+	finalizedEpochVotes := make(map[uint64]uint64)
+	pidEpoch := make(map[peer.ID]uint64)
 	potentialPIDs := make([]peer.ID, 0, len(connected))
 	for _, pid := range connected {
 		peerChainState, err := p.ChainState(pid)
 		if err == nil && peerChainState != nil && peerChainState.FinalizedEpoch >= ourFinalizedEpoch {
-			root := bytesutil.ToBytes32(peerChainState.FinalizedRoot)
-			finalized[root]++
-			rootToEpoch[root] = peerChainState.FinalizedEpoch
-			pidEpochs[pid] = peerChainState.FinalizedEpoch
+			finalizedEpochVotes[peerChainState.FinalizedEpoch]++
+			pidEpoch[pid] = peerChainState.FinalizedEpoch
 			potentialPIDs = append(potentialPIDs, pid)
 		}
 	}
 
 	// Select the target epoch, which is the epoch most peers agree upon.
-	var targetRoot [32]byte
+	var targetEpoch uint64
 	var mostVotes uint64
-	for root, count := range finalized {
+	for epoch, count := range finalizedEpochVotes {
 		if count > mostVotes {
 			mostVotes = count
-			targetRoot = root
+			targetEpoch = epoch
 		}
 	}
-	targetEpoch := rootToEpoch[targetRoot]
 
 	// Sort PIDs by finalized epoch, in decreasing order.
 	sort.Slice(potentialPIDs, func(i, j int) bool {
-		return pidEpochs[potentialPIDs[i]] > pidEpochs[potentialPIDs[j]]
+		return pidEpoch[potentialPIDs[i]] > pidEpoch[potentialPIDs[j]]
 	})
 
 	// Trim potential peers to those on or after target epoch.
 	for i, pid := range potentialPIDs {
-		if pidEpochs[pid] < targetEpoch {
+		if pidEpoch[pid] < targetEpoch {
 			potentialPIDs = potentialPIDs[:i]
 			break
 		}
@@ -383,7 +468,7 @@ func (p *Status) BestFinalized(maxPeers int, ourFinalizedEpoch uint64) ([]byte, 
 		potentialPIDs = potentialPIDs[:maxPeers]
 	}
 
-	return targetRoot[:], targetEpoch, potentialPIDs
+	return targetEpoch, potentialPIDs
 }
 
 // fetch is a helper function that fetches a peer status, possibly creating it.
@@ -394,8 +479,8 @@ func (p *Status) fetch(pid peer.ID) *peerStatus {
 	return p.status[pid]
 }
 
-// CurrentEpoch returns the highest reported epoch amongst peers.
-func (p *Status) CurrentEpoch() uint64 {
+// HighestEpoch returns the highest epoch reported epoch amongst peers.
+func (p *Status) HighestEpoch() uint64 {
 	p.lock.RLock()
 	defer p.lock.RUnlock()
 	var highestSlot uint64
@@ -405,4 +490,14 @@ func (p *Status) CurrentEpoch() uint64 {
 		}
 	}
 	return helpers.SlotToEpoch(highestSlot)
+}
+
+func retrieveIndicesFromBitfield(bitV bitfield.Bitvector64) []uint64 {
+	committeeIdxs := []uint64{}
+	for i := uint64(0); i < 64; i++ {
+		if bitV.BitAt(i) {
+			committeeIdxs = append(committeeIdxs, i)
+		}
+	}
+	return committeeIdxs
 }

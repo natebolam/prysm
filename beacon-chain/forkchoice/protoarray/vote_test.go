@@ -24,7 +24,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//         0
 	//        /
 	//       2 <- head
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(2), params.BeaconConfig().ZeroHash, 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(2), params.BeaconConfig().ZeroHash, [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -39,7 +39,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//            0
 	//           / \
 	//  head -> 2  1
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(1), params.BeaconConfig().ZeroHash, 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(1), params.BeaconConfig().ZeroHash, [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -82,7 +82,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//  head -> 2  1
 	//             |
 	//             3
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(3), indexToHash(1), 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(3), indexToHash(1), [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -131,7 +131,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//             3
 	//             |
 	//             4 <- head
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(4), indexToHash(3), 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(4), indexToHash(3), [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -152,7 +152,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//             4 <- head
 	//            /
 	//           5 <- justified epoch = 2
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(5), indexToHash(4), 2, 2); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(5), indexToHash(4), [32]byte{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -173,7 +173,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//             4 <- head
 	//            / \
 	//           5  6 <- justified epoch = 0
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(6), indexToHash(4), 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(6), indexToHash(4), [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -187,7 +187,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//             4
 	//            / \
 	// 2 votes-> 5  6
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(6), indexToHash(4), 1, 1); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(6), indexToHash(4), [32]byte{}, 1, 1); err != nil {
 		t.Fatal(err)
 	}
 	f.ProcessAttestation(context.Background(), []uint64{0, 1}, indexToHash(5), 4)
@@ -209,13 +209,13 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//           8
 	//           |
 	//           9
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(7), indexToHash(5), 2, 2); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(7), indexToHash(5), [32]byte{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(8), indexToHash(7), 2, 2); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(8), indexToHash(7), [32]byte{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(9), indexToHash(8), 2, 2); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(9), indexToHash(8), [32]byte{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 1, params.BeaconConfig().ZeroHash, balances, 1)
@@ -269,7 +269,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//           / \
 	// 2 votes->9  10
 	f.ProcessAttestation(context.Background(), []uint64{0, 1}, indexToHash(9), 5)
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(10), indexToHash(8), 2, 2); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(10), indexToHash(8), [32]byte{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 2, indexToHash(5), balances, 2)
@@ -327,11 +327,11 @@ func TestVotes_CanFindHead(t *testing.T) {
 	}
 
 	// Verify pruning below the prune threshold does not affect head.
-	f.store.pruneThreshold = 1000
+	f.store.PruneThreshold = 1000
 	if err := f.store.prune(context.Background(), indexToHash(5)); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.store.nodes) != 11 {
+	if len(f.store.Nodes) != 11 {
 		t.Error("Incorrect no length after prune")
 	}
 	r, err = f.Head(context.Background(), 2, indexToHash(5), balances, 2)
@@ -358,11 +358,11 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//          8
 	//         / \
 	//        9  10
-	f.store.pruneThreshold = 1
+	f.store.PruneThreshold = 1
 	if err := f.store.prune(context.Background(), indexToHash(5)); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.store.nodes) != 6 {
+	if len(f.store.Nodes) != 6 {
 		t.Error("Incorrect no length after prune")
 	}
 	r, err = f.Head(context.Background(), 2, indexToHash(5), balances, 2)
@@ -383,7 +383,7 @@ func TestVotes_CanFindHead(t *testing.T) {
 	//        9  10
 	//        |
 	// head-> 11
-	if err := f.ProcessBlock(context.Background(), 0, indexToHash(11), indexToHash(9), 2, 2); err != nil {
+	if err := f.ProcessBlock(context.Background(), 0, indexToHash(11), indexToHash(9), [32]byte{}, 2, 2); err != nil {
 		t.Fatal(err)
 	}
 	r, err = f.Head(context.Background(), 2, indexToHash(5), balances, 2)

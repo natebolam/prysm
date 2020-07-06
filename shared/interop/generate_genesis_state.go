@@ -1,3 +1,5 @@
+// Package interop contains deterministic utilities for generating
+// genesis states and keys.
 package interop
 
 import (
@@ -6,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-ssz"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bls"
@@ -95,7 +98,7 @@ func generateDepositsFromData(depositDataItems []*ethpb.Deposit_Data, offset int
 }
 
 // DepositDataFromKeys generates a list of deposit data items from a set of BLS validator keys.
-func DepositDataFromKeys(privKeys []*bls.SecretKey, pubKeys []*bls.PublicKey) ([]*ethpb.Deposit_Data, [][]byte, error) {
+func DepositDataFromKeys(privKeys []bls.SecretKey, pubKeys []bls.PublicKey) ([]*ethpb.Deposit_Data, [][]byte, error) {
 	type depositData struct {
 		items []*ethpb.Deposit_Data
 		roots [][]byte
@@ -120,7 +123,7 @@ func DepositDataFromKeys(privKeys []*bls.SecretKey, pubKeys []*bls.PublicKey) ([
 	return depositDataItems, depositDataRoots, nil
 }
 
-func depositDataFromKeys(privKeys []*bls.SecretKey, pubKeys []*bls.PublicKey) ([]*ethpb.Deposit_Data, [][]byte, error) {
+func depositDataFromKeys(privKeys []bls.SecretKey, pubKeys []bls.PublicKey) ([]*ethpb.Deposit_Data, [][]byte, error) {
 	dataRoots := make([][]byte, len(privKeys))
 	depositDataItems := make([]*ethpb.Deposit_Data, len(privKeys))
 	for i := 0; i < len(privKeys); i++ {
@@ -139,7 +142,7 @@ func depositDataFromKeys(privKeys []*bls.SecretKey, pubKeys []*bls.PublicKey) ([
 }
 
 // Generates a deposit data item from BLS keys and signs the hash tree root of the data.
-func createDepositData(privKey *bls.SecretKey, pubKey *bls.PublicKey) (*ethpb.Deposit_Data, error) {
+func createDepositData(privKey bls.SecretKey, pubKey bls.PublicKey) (*ethpb.Deposit_Data, error) {
 	di := &ethpb.Deposit_Data{
 		PublicKey:             pubKey.Marshal(),
 		WithdrawalCredentials: withdrawalCredentialsHash(pubKey.Marshal()),
@@ -149,8 +152,15 @@ func createDepositData(privKey *bls.SecretKey, pubKey *bls.PublicKey) (*ethpb.De
 	if err != nil {
 		return nil, err
 	}
-	domain := bls.ComputeDomain(params.BeaconConfig().DomainDeposit)
-	di.Signature = privKey.Sign(sr[:], domain).Marshal()
+	domain, err := helpers.ComputeDomain(params.BeaconConfig().DomainDeposit, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	root, err := ssz.HashTreeRoot(&pb.SigningData{ObjectRoot: sr[:], Domain: domain})
+	if err != nil {
+		return nil, err
+	}
+	di.Signature = privKey.Sign(root[:]).Marshal()
 	return di, nil
 }
 

@@ -1,3 +1,4 @@
+// Package slotutil includes ticker and timer-related functions for eth2.
 package slotutil
 
 import (
@@ -47,6 +48,23 @@ func GetSlotTicker(genesisTime time.Time, secondsPerSlot uint64) *SlotTicker {
 		done: make(chan struct{}),
 	}
 	ticker.start(genesisTime, secondsPerSlot, roughtime.Since, roughtime.Until, time.After)
+	return ticker
+}
+
+// GetSlotTickerWithOffset is a constructor for SlotTicker that allows a offset of time from genesis,
+// entering a offset greater than secondsPerSlot is not allowed.
+func GetSlotTickerWithOffset(genesisTime time.Time, offset time.Duration, secondsPerSlot uint64) *SlotTicker {
+	if genesisTime.Unix() == 0 {
+		panic("zero genesis time")
+	}
+	if offset > time.Duration(secondsPerSlot)*time.Second {
+		panic("invalid ticker offset")
+	}
+	ticker := &SlotTicker{
+		c:    make(chan uint64),
+		done: make(chan struct{}),
+	}
+	ticker.start(genesisTime.Add(offset), secondsPerSlot, roughtime.Since, roughtime.Until, time.After)
 	return ticker
 }
 

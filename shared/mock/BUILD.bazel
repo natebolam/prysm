@@ -1,4 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@prysm//tools/go:def.bzl", "go_library")
 
 package(default_testonly = True)
 
@@ -6,6 +6,9 @@ go_library(
     name = "go_default_library",
     srcs = [
         "beacon_chain_service_mock.go",
+        "beacon_service_mock.go",
+        "beacon_validator_client_mock.go",
+        "beacon_validator_server_mock.go",
         "node_service_mock.go",
     ],
     importpath = "github.com/prysmaticlabs/prysm/shared/mock",

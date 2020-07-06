@@ -15,19 +15,16 @@ func init() {
 }
 
 func TestChainService_SaveHead_DataRace(t *testing.T) {
-	db := testDB.SetupDB(t)
-	defer testDB.TeardownDB(t, db)
+	db, _ := testDB.SetupDB(t)
 	s := &Service{
 		beaconDB: db,
 	}
 	go func() {
-		s.saveHead(
-			context.Background(),
-			[32]byte{},
-		)
+		if err := s.saveHead(context.Background(), [32]byte{}); err != nil {
+			t.Fatal(err)
+		}
 	}()
-	s.saveHead(
-		context.Background(),
-		[32]byte{},
-	)
+	if err := s.saveHead(context.Background(), [32]byte{}); err != nil {
+		t.Fatal(err)
+	}
 }

@@ -10,20 +10,12 @@ import (
 	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/interop"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
-func init() {
-	config := &featureconfig.Flags{
-		EnableSSZCache: true,
-	}
-	featureconfig.Init(config)
-}
-
 func TestState_FieldCount(t *testing.T) {
-	count := 20
+	count := 21
 	typ := reflect.TypeOf(pb.BeaconState{})
 	numFields := 0
 	for i := 0; i < typ.NumField(); i++ {

@@ -4,14 +4,17 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
+	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
 func TestCheckpointStateCacheKeyFn_OK(t *testing.T) {
-	cp := &ethpb.Checkpoint{Epoch: 1, Root: []byte{'A'}}
+	cp := &ethpb.Checkpoint{Epoch: 1, Root: bytesutil.PadTo([]byte{'A'}, 32)}
 	st, err := stateTrie.InitializeFromProto(&pb.BeaconState{
 		Slot: 64,
 	})
@@ -45,9 +48,10 @@ func TestCheckpointStateCacheKeyFn_InvalidObj(t *testing.T) {
 func TestCheckpointStateCache_StateByCheckpoint(t *testing.T) {
 	cache := NewCheckpointStateCache()
 
-	cp1 := &ethpb.Checkpoint{Epoch: 1, Root: []byte{'A'}}
+	cp1 := &ethpb.Checkpoint{Epoch: 1, Root: bytesutil.PadTo([]byte{'A'}, 32)}
 	st, err := stateTrie.InitializeFromProto(&pb.BeaconState{
-		Slot: 64,
+		GenesisValidatorsRoot: params.BeaconConfig().ZeroHash[:],
+		Slot:                  64,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -71,11 +75,11 @@ func TestCheckpointStateCache_StateByCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(state.InnerStateUnsafe(), info1.State.InnerStateUnsafe()) {
+	if !proto.Equal(state.InnerStateUnsafe(), info1.State.InnerStateUnsafe()) {
 		t.Error("incorrectly cached state")
 	}
 
-	cp2 := &ethpb.Checkpoint{Epoch: 2, Root: []byte{'B'}}
+	cp2 := &ethpb.Checkpoint{Epoch: 2, Root: bytesutil.PadTo([]byte{'B'}, 32)}
 	st2, err := stateTrie.InitializeFromProto(&pb.BeaconState{
 		Slot: 128,
 	})
@@ -114,12 +118,12 @@ func TestCheckpointStateCache_MaxSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < maxCheckpointStateSize+100; i++ {
-		if err := st.SetSlot(uint64(i)); err != nil {
+	for i := uint64(0); i < maxCheckpointStateSize+100; i++ {
+		if err := st.SetSlot(i); err != nil {
 			t.Fatal(err)
 		}
 		info := &CheckpointState{
-			Checkpoint: &ethpb.Checkpoint{Epoch: uint64(i)},
+			Checkpoint: &ethpb.Checkpoint{Epoch: i},
 			State:      st,
 		}
 		if err := c.AddCheckpointState(info); err != nil {
@@ -127,7 +131,7 @@ func TestCheckpointStateCache_MaxSize(t *testing.T) {
 		}
 	}
 
-	if len(c.cache.ListKeys()) != maxCheckpointStateSize {
+	if uint64(len(c.cache.ListKeys())) != maxCheckpointStateSize {
 		t.Errorf(
 			"Expected hash cache key size to be %d, got %d",
 			maxCheckpointStateSize,

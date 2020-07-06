@@ -6,7 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 
-	"github.com/prysmaticlabs/go-ssz"
+	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 )
 
@@ -21,11 +21,15 @@ func main() {
 
 	fmt.Printf("Reading db at %s and writing ssz output to %s.\n", os.Args[1], os.Args[2])
 
-	d, err := db.NewDB(os.Args[1])
+	d, err := db.NewDB(os.Args[1], cache.NewStateSummaryCache())
 	if err != nil {
 		panic(err)
 	}
-	defer d.Close()
+	defer func() {
+		if err := d.Close(); err != nil {
+			panic(err)
+		}
+	}()
 	gs, err := d.GenesisState(context.Background())
 	if err != nil {
 		panic(err)
@@ -33,7 +37,7 @@ func main() {
 	if gs == nil {
 		panic("nil genesis state")
 	}
-	b, err := ssz.Marshal(gs)
+	b, err := gs.InnerStateUnsafe().MarshalSSZ()
 	if err != nil {
 		panic(err)
 	}

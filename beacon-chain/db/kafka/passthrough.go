@@ -10,6 +10,7 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/proto/beacon/db"
 	ethereum_beacon_p2p_v1 "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 )
 
 // DatabasePath -- passthrough.
@@ -77,34 +78,14 @@ func (e Exporter) HasBlock(ctx context.Context, blockRoot [32]byte) bool {
 	return e.db.HasBlock(ctx, blockRoot)
 }
 
-// DeleteBlock -- passthrough.
-func (e Exporter) DeleteBlock(ctx context.Context, blockRoot [32]byte) error {
-	return e.db.DeleteBlock(ctx, blockRoot)
-}
-
-// DeleteBlocks -- passthrough.
-func (e Exporter) DeleteBlocks(ctx context.Context, blockRoots [][32]byte) error {
-	return e.db.DeleteBlocks(ctx, blockRoots)
-}
-
-// ValidatorIndex -- passthrough.
-func (e Exporter) ValidatorIndex(ctx context.Context, publicKey []byte) (uint64, bool, error) {
-	return e.db.ValidatorIndex(ctx, publicKey)
-}
-
-// HasValidatorIndex -- passthrough.
-func (e Exporter) HasValidatorIndex(ctx context.Context, publicKey []byte) bool {
-	return e.db.HasValidatorIndex(ctx, publicKey)
-}
-
-// DeleteValidatorIndex -- passthrough.
-func (e Exporter) DeleteValidatorIndex(ctx context.Context, publicKey []byte) error {
-	return e.db.DeleteValidatorIndex(ctx, publicKey)
-}
-
 // State -- passthrough.
 func (e Exporter) State(ctx context.Context, blockRoot [32]byte) (*state.BeaconState, error) {
 	return e.db.State(ctx, blockRoot)
+}
+
+// StateSummary -- passthrough.
+func (e Exporter) StateSummary(ctx context.Context, blockRoot [32]byte) (*pb.StateSummary, error) {
+	return e.db.StateSummary(ctx, blockRoot)
 }
 
 // HeadState -- passthrough.
@@ -137,16 +118,6 @@ func (e Exporter) HasAttesterSlashing(ctx context.Context, slashingRoot [32]byte
 	return e.db.HasAttesterSlashing(ctx, slashingRoot)
 }
 
-// DeleteProposerSlashing -- passthrough.
-func (e Exporter) DeleteProposerSlashing(ctx context.Context, slashingRoot [32]byte) error {
-	return e.db.DeleteProposerSlashing(ctx, slashingRoot)
-}
-
-// DeleteAttesterSlashing -- passthrough.
-func (e Exporter) DeleteAttesterSlashing(ctx context.Context, slashingRoot [32]byte) error {
-	return e.db.DeleteAttesterSlashing(ctx, slashingRoot)
-}
-
 // VoluntaryExit -- passthrough.
 func (e Exporter) VoluntaryExit(ctx context.Context, exitRoot [32]byte) (*eth.VoluntaryExit, error) {
 	return e.db.VoluntaryExit(ctx, exitRoot)
@@ -155,11 +126,6 @@ func (e Exporter) VoluntaryExit(ctx context.Context, exitRoot [32]byte) (*eth.Vo
 // HasVoluntaryExit -- passthrough.
 func (e Exporter) HasVoluntaryExit(ctx context.Context, exitRoot [32]byte) bool {
 	return e.db.HasVoluntaryExit(ctx, exitRoot)
-}
-
-// DeleteVoluntaryExit -- passthrough.
-func (e Exporter) DeleteVoluntaryExit(ctx context.Context, exitRoot [32]byte) error {
-	return e.db.DeleteVoluntaryExit(ctx, exitRoot)
 }
 
 // JustifiedCheckpoint -- passthrough.
@@ -212,19 +178,19 @@ func (e Exporter) SaveGenesisBlockRoot(ctx context.Context, blockRoot [32]byte) 
 	return e.db.SaveGenesisBlockRoot(ctx, blockRoot)
 }
 
-// SaveValidatorIndex -- passthrough.
-func (e Exporter) SaveValidatorIndex(ctx context.Context, publicKey []byte, validatorIdx uint64) error {
-	return e.db.SaveValidatorIndex(ctx, publicKey, validatorIdx)
-}
-
-// SaveValidatorIndices -- passthrough.
-func (e Exporter) SaveValidatorIndices(ctx context.Context, publicKeys [][48]byte, validatorIndices []uint64) error {
-	return e.db.SaveValidatorIndices(ctx, publicKeys, validatorIndices)
-}
-
 // SaveState -- passthrough.
 func (e Exporter) SaveState(ctx context.Context, state *state.BeaconState, blockRoot [32]byte) error {
 	return e.db.SaveState(ctx, state, blockRoot)
+}
+
+// SaveStateSummary -- passthrough.
+func (e Exporter) SaveStateSummary(ctx context.Context, summary *pb.StateSummary) error {
+	return e.db.SaveStateSummary(ctx, summary)
+}
+
+// SaveStateSummaries -- passthrough.
+func (e Exporter) SaveStateSummaries(ctx context.Context, summaries []*pb.StateSummary) error {
+	return e.db.SaveStateSummaries(ctx, summaries)
 }
 
 // SaveStates -- passthrough.
@@ -297,6 +263,11 @@ func (e Exporter) HasState(ctx context.Context, blockRoot [32]byte) bool {
 	return e.db.HasState(ctx, blockRoot)
 }
 
+// HasStateSummary -- passthrough.
+func (e Exporter) HasStateSummary(ctx context.Context, blockRoot [32]byte) bool {
+	return e.db.HasStateSummary(ctx, blockRoot)
+}
+
 // IsFinalizedBlock -- passthrough.
 func (e Exporter) IsFinalizedBlock(ctx context.Context, blockRoot [32]byte) bool {
 	return e.db.IsFinalizedBlock(ctx, blockRoot)
@@ -310,4 +281,59 @@ func (e Exporter) PowchainData(ctx context.Context) (*db.ETH1ChainData, error) {
 // SavePowchainData -- passthrough
 func (e Exporter) SavePowchainData(ctx context.Context, data *db.ETH1ChainData) error {
 	return e.db.SavePowchainData(ctx, data)
+}
+
+// SaveArchivedPointRoot -- passthrough
+func (e Exporter) SaveArchivedPointRoot(ctx context.Context, blockRoot [32]byte, index uint64) error {
+	return e.db.SaveArchivedPointRoot(ctx, blockRoot, index)
+}
+
+// ArchivedPointRoot -- passthrough
+func (e Exporter) ArchivedPointRoot(ctx context.Context, index uint64) [32]byte {
+	return e.db.ArchivedPointRoot(ctx, index)
+}
+
+// HasArchivedPoint -- passthrough
+func (e Exporter) HasArchivedPoint(ctx context.Context, index uint64) bool {
+	return e.db.HasArchivedPoint(ctx, index)
+}
+
+// LastArchivedIndexRoot -- passthrough
+func (e Exporter) LastArchivedIndexRoot(ctx context.Context) [32]byte {
+	return e.db.LastArchivedIndexRoot(ctx)
+}
+
+// HighestSlotBlocks -- passthrough
+func (e Exporter) HighestSlotBlocks(ctx context.Context) ([]*ethpb.SignedBeaconBlock, error) {
+	return e.db.HighestSlotBlocks(ctx)
+}
+
+// HighestSlotBlocksBelow -- passthrough
+func (e Exporter) HighestSlotBlocksBelow(ctx context.Context, slot uint64) ([]*ethpb.SignedBeaconBlock, error) {
+	return e.db.HighestSlotBlocksBelow(ctx, slot)
+}
+
+// HighestSlotStates -- passthrough
+func (e Exporter) HighestSlotStates(ctx context.Context) ([]*state.BeaconState, error) {
+	return e.db.HighestSlotStates(ctx)
+}
+
+// HighestSlotStatesBelow -- passthrough
+func (e Exporter) HighestSlotStatesBelow(ctx context.Context, slot uint64) ([]*state.BeaconState, error) {
+	return e.db.HighestSlotStatesBelow(ctx, slot)
+}
+
+// SaveLastArchivedIndex -- passthrough
+func (e Exporter) SaveLastArchivedIndex(ctx context.Context, index uint64) error {
+	return e.db.SaveLastArchivedIndex(ctx, index)
+}
+
+// LastArchivedIndex -- passthrough
+func (e Exporter) LastArchivedIndex(ctx context.Context) (uint64, error) {
+	return e.db.LastArchivedIndex(ctx)
+}
+
+// HistoricalStatesDeleted -- passthrough
+func (e Exporter) HistoricalStatesDeleted(ctx context.Context) error {
+	return e.db.HistoricalStatesDeleted(ctx)
 }

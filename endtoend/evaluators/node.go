@@ -1,3 +1,5 @@
+// Package evaluators defines functions which can peer into end to end
+// tests to determine if a chain is running as required.
 package evaluators
 
 import (
@@ -6,56 +8,115 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"strconv"
-	"strings"
+	"time"
 
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/pkg/errors"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	e2e "github.com/prysmaticlabs/prysm/endtoend/params"
+	"github.com/prysmaticlabs/prysm/endtoend/types"
 	"google.golang.org/grpc"
 )
 
-// PeersConnect checks all beacon nodes and returns whether they are connected to each other as peers.
-func PeersConnect(beaconNodes []*BeaconNodeInfo) error {
-	for _, bNode := range beaconNodes {
-		response, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/p2p", bNode.MonitorPort))
-		if err != nil {
-			return errors.Wrap(err, "failed to reach p2p metrics page")
-		}
-		dataInBytes, err := ioutil.ReadAll(response.Body)
-		if err != nil {
-			return err
-		}
-		if err := response.Body.Close(); err != nil {
-			return err
-		}
+// Allow a very short delay after disconnecting to prevent connection refused issues.
+var connTimeDelay = 50 * time.Millisecond
 
-		// Subtracting by 2 here since the libp2p page has "3 peers" as text.
-		// With a starting index before the "p", going two characters back should give us
-		// the number we need.
-		startIdx := strings.Index(string(dataInBytes), "peers") - 2
-		if startIdx == -3 {
-			return fmt.Errorf("could not find needed text in %s", dataInBytes)
-		}
-		peerCount, err := strconv.Atoi(string(dataInBytes)[startIdx : startIdx+1])
+// PeersConnect checks all beacon nodes and returns whether they are connected to each other as peers.
+var PeersConnect = types.Evaluator{
+	Name:       "peers_connect_epoch_%d",
+	Policy:     onEpoch(0),
+	Evaluation: peersConnect,
+}
+
+// HealthzCheck pings healthz and errors if it doesn't have the expected OK status.
+var HealthzCheck = types.Evaluator{
+	Name:       "healthz_check_epoch_%d",
+	Policy:     afterNthEpoch(0),
+	Evaluation: healthzCheck,
+}
+
+// FinishedSyncing returns whether the beacon node with the given rpc port has finished syncing.
+var FinishedSyncing = types.Evaluator{
+	Name:       "finished_syncing",
+	Policy:     func(currentEpoch uint64) bool { return true },
+	Evaluation: finishedSyncing,
+}
+
+// AllNodesHaveSameHead ensures all nodes have the same head epoch. Checks finality and justification as well.
+// Not checking head block root as it may change irregularly for the validator connected nodes.
+var AllNodesHaveSameHead = types.Evaluator{
+	Name:       "all_nodes_have_same_head",
+	Policy:     func(currentEpoch uint64) bool { return true },
+	Evaluation: allNodesHaveSameHead,
+}
+
+func onEpoch(epoch uint64) func(uint64) bool {
+	return func(currentEpoch uint64) bool {
+		return currentEpoch == epoch
+	}
+}
+
+func healthzCheck(conns ...*grpc.ClientConn) error {
+	count := len(conns)
+	for i := 0; i < count; i++ {
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%d/healthz", e2e.TestParams.BeaconNodeMetricsPort+i))
 		if err != nil {
+			return errors.Wrapf(err, "could not connect to beacon node %d", i)
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("expected status code OK for beacon node %d, received %v with body %s", i, resp.StatusCode, body)
+		}
+		if err := resp.Body.Close(); err != nil {
 			return err
 		}
-		expectedPeers := uint64(len(beaconNodes) - 1)
-		if expectedPeers != uint64(peerCount) {
-			return fmt.Errorf("unexpected amount of peers, expected %d, received %d", expectedPeers, peerCount)
+		time.Sleep(connTimeDelay)
+
+		resp, err = http.Get(fmt.Sprintf("http://localhost:%d/healthz", e2e.TestParams.ValidatorMetricsPort+i))
+		if err != nil {
+			return errors.Wrapf(err, "could not connect to validator client %d", i)
 		}
+		if resp.StatusCode != http.StatusOK {
+			body, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("expected status code OK for validator client %d, received %v with body %s", i, resp.StatusCode, body)
+		}
+		if err := resp.Body.Close(); err != nil {
+			return err
+		}
+		time.Sleep(connTimeDelay)
 	}
 	return nil
 }
 
-// FinishedSyncing returns whether the beacon node with the given rpc port has finished syncing.
-func FinishedSyncing(rpcPort uint64) error {
-	syncConn, err := grpc.Dial(fmt.Sprintf("127.0.0.1:%d", rpcPort), grpc.WithInsecure())
-	if err != nil {
-		return errors.Wrap(err, "failed to dial: %v")
+func peersConnect(conns ...*grpc.ClientConn) error {
+	if len(conns) == 1 {
+		return nil
 	}
-	syncNodeClient := eth.NewNodeClient(syncConn)
+	ctx := context.Background()
+	for _, conn := range conns {
+		nodeClient := eth.NewNodeClient(conn)
+		peersResp, err := nodeClient.ListPeers(ctx, &ptypes.Empty{})
+		if err != nil {
+			return err
+		}
+		expectedPeers := len(conns) - 1
+		if expectedPeers != len(peersResp.Peers) {
+			return fmt.Errorf("unexpected amount of peers, expected %d, received %d", expectedPeers, len(peersResp.Peers))
+		}
+		time.Sleep(connTimeDelay)
+	}
+	return nil
+}
+
+func finishedSyncing(conns ...*grpc.ClientConn) error {
+	conn := conns[0]
+	syncNodeClient := eth.NewNodeClient(conn)
 	syncStatus, err := syncNodeClient.GetSyncStatus(context.Background(), &ptypes.Empty{})
 	if err != nil {
 		return err
@@ -66,19 +127,12 @@ func FinishedSyncing(rpcPort uint64) error {
 	return nil
 }
 
-// AllChainsHaveSameHead connects to all RPC ports in the passed in array and ensures they have the same head epoch.
-// Checks finality and justification as well.
-// Not checking head block root as it may change irregularly for the validator connected nodes.
-func AllChainsHaveSameHead(beaconNodes []*BeaconNodeInfo) error {
-	headEpochs := make([]uint64, len(beaconNodes))
-	justifiedRoots := make([][]byte, len(beaconNodes))
-	prevJustifiedRoots := make([][]byte, len(beaconNodes))
-	finalizedRoots := make([][]byte, len(beaconNodes))
-	for i, bNode := range beaconNodes {
-		conn, err := grpc.Dial(fmt.Sprintf("127.0.0.1:%d", bNode.RPCPort), grpc.WithInsecure())
-		if err != nil {
-			return errors.Wrap(err, "Failed to dial")
-		}
+func allNodesHaveSameHead(conns ...*grpc.ClientConn) error {
+	headEpochs := make([]uint64, len(conns))
+	justifiedRoots := make([][]byte, len(conns))
+	prevJustifiedRoots := make([][]byte, len(conns))
+	finalizedRoots := make([][]byte, len(conns))
+	for i, conn := range conns {
 		beaconClient := eth.NewBeaconChainClient(conn)
 		chainHead, err := beaconClient.GetChainHead(context.Background(), &ptypes.Empty{})
 		if err != nil {
@@ -88,48 +142,40 @@ func AllChainsHaveSameHead(beaconNodes []*BeaconNodeInfo) error {
 		justifiedRoots[i] = chainHead.JustifiedBlockRoot
 		prevJustifiedRoots[i] = chainHead.PreviousJustifiedBlockRoot
 		finalizedRoots[i] = chainHead.FinalizedBlockRoot
-		if err := conn.Close(); err != nil {
-			return err
-		}
+		time.Sleep(connTimeDelay)
 	}
 
-	for i, epoch := range headEpochs {
-		if headEpochs[0] != epoch {
+	for i := 0; i < len(conns); i++ {
+		if headEpochs[0] != headEpochs[i] {
 			return fmt.Errorf(
 				"received conflicting head epochs on node %d, expected %d, received %d",
 				i,
 				headEpochs[0],
-				epoch,
+				headEpochs[i],
 			)
 		}
-	}
-	for i, root := range justifiedRoots {
-		if !bytes.Equal(justifiedRoots[0], root) {
+		if !bytes.Equal(justifiedRoots[0], justifiedRoots[i]) {
 			return fmt.Errorf(
 				"received conflicting justified block roots on node %d, expected %#x, received %#x",
 				i,
 				justifiedRoots[0],
-				root,
+				justifiedRoots[i],
 			)
 		}
-	}
-	for i, root := range prevJustifiedRoots {
-		if !bytes.Equal(prevJustifiedRoots[0], root) {
+		if !bytes.Equal(prevJustifiedRoots[0], prevJustifiedRoots[i]) {
 			return fmt.Errorf(
 				"received conflicting previous justified block roots on node %d, expected %#x, received %#x",
 				i,
 				prevJustifiedRoots[0],
-				root,
+				prevJustifiedRoots[i],
 			)
 		}
-	}
-	for i, root := range finalizedRoots {
-		if !bytes.Equal(finalizedRoots[0], root) {
+		if !bytes.Equal(finalizedRoots[0], finalizedRoots[i]) {
 			return fmt.Errorf(
 				"received conflicting finalized epoch roots on node %d, expected %#x, received %#x",
 				i,
 				finalizedRoots[0],
-				root,
+				finalizedRoots[i],
 			)
 		}
 	}

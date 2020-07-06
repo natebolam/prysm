@@ -13,7 +13,6 @@ import (
 )
 
 var (
-	amount33Eth        = "33000000000000000000"
 	amount32Eth        = "32000000000000000000"
 	amountLessThan1Eth = "500000000000000000"
 )
@@ -22,8 +21,8 @@ var (
 // through which we can perform actions on the eth1.0 chain.
 type TestAccount struct {
 	Addr         common.Address
-	Contract     *DepositContract
 	ContractAddr common.Address
+	Contract     *DepositContract
 	Backend      *backends.SimulatedBackend
 	TxOpts       *bind.TransactOpts
 }
@@ -31,7 +30,10 @@ type TestAccount struct {
 // Setup creates the simulated backend with the deposit contract deployed
 func Setup() (*TestAccount, error) {
 	genesis := make(core.GenesisAlloc)
-	privKey, _ := crypto.GenerateKey()
+	privKey, err := crypto.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
 	pubKeyECDSA, ok := privKey.Public().(*ecdsa.PublicKey)
 	if !ok {
 		return nil, fmt.Errorf("error casting public key to ECDSA")
@@ -54,7 +56,7 @@ func Setup() (*TestAccount, error) {
 	}
 	backend.Commit()
 
-	return &TestAccount{addr, contract, contractAddr, backend, txOpts}, nil
+	return &TestAccount{addr, contractAddr, contract, backend, txOpts}, nil
 }
 
 // Amount32Eth returns 32Eth(in wei) in terms of the big.Int type.

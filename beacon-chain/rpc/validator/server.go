@@ -1,3 +1,6 @@
+// Package validator defines a gRPC validator service implementation, providing
+// critical endpoints for validator clients to submit blocks/attestations to the
+// beacon node, receive assignments, and more.
 package validator
 
 import (
@@ -5,6 +8,7 @@ import (
 	"time"
 
 	ptypes "github.com/gogo/protobuf/types"
+	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain"
 	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
@@ -20,9 +24,11 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/voluntaryexits"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
 	"github.com/prysmaticlabs/prysm/beacon-chain/sync"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
-	pb "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -64,14 +70,14 @@ type Server struct {
 	Eth1BlockFetcher       powchain.POWBlockFetcher
 	PendingDepositsFetcher depositcache.PendingDepositsFetcher
 	OperationNotifier      opfeed.Notifier
-	GenesisTime            time.Time
+	StateGen               *stategen.State
 }
 
 // WaitForActivation checks if a validator public key exists in the active validator registry of the current
 // beacon state, if not, then it creates a stream which listens for canonical states which contain
 // the validator with the public key as an active validator record.
 func (vs *Server) WaitForActivation(req *ethpb.ValidatorActivationRequest, stream ethpb.BeaconNodeValidator_WaitForActivationServer) error {
-	activeValidatorExists, validatorStatuses, err := vs.multipleValidatorStatus(stream.Context(), req.PublicKeys)
+	activeValidatorExists, validatorStatuses, err := vs.activationStatus(stream.Context(), req.PublicKeys)
 	if err != nil {
 		return status.Errorf(codes.Internal, "Could not fetch validator status: %v", err)
 	}
@@ -87,8 +93,9 @@ func (vs *Server) WaitForActivation(req *ethpb.ValidatorActivationRequest, strea
 
 	for {
 		select {
-		case <-time.After(6 * time.Second):
-			activeValidatorExists, validatorStatuses, err := vs.multipleValidatorStatus(stream.Context(), req.PublicKeys)
+		// Pinging every slot for activation.
+		case <-time.After(time.Duration(params.BeaconConfig().SecondsPerSlot) * time.Second):
+			activeValidatorExists, validatorStatuses, err := vs.activationStatus(stream.Context(), req.PublicKeys)
 			if err != nil {
 				return status.Errorf(codes.Internal, "Could not fetch validator status: %v", err)
 			}
@@ -111,10 +118,11 @@ func (vs *Server) WaitForActivation(req *ethpb.ValidatorActivationRequest, strea
 
 // ValidatorIndex is called by a validator to get its index location in the beacon state.
 func (vs *Server) ValidatorIndex(ctx context.Context, req *ethpb.ValidatorIndexRequest) (*ethpb.ValidatorIndexResponse, error) {
-	index, ok, err := vs.BeaconDB.ValidatorIndex(ctx, req.PublicKey)
+	st, err := vs.HeadFetcher.HeadState(ctx)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not fetch validator index: %v", err)
+		return nil, status.Errorf(codes.Internal, "Could not determine head state: %v", err)
 	}
+	index, ok := st.ValidatorIndexByPubkey(bytesutil.ToBytes48(req.PublicKey))
 	if !ok {
 		return nil, status.Errorf(codes.Internal, "Could not find validator index for public key %#x not found", req.PublicKey)
 	}
@@ -122,36 +130,14 @@ func (vs *Server) ValidatorIndex(ctx context.Context, req *ethpb.ValidatorIndexR
 	return &ethpb.ValidatorIndexResponse{Index: index}, nil
 }
 
-// ExitedValidators queries validator statuses for a give list of validators
-// and returns a filtered list of validator keys that are exited.
-func (vs *Server) ExitedValidators(
-	ctx context.Context,
-	req *pb.ExitedValidatorsRequest) (*pb.ExitedValidatorsResponse, error) {
-
-	_, statuses, err := vs.multipleValidatorStatus(ctx, req.PublicKeys)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "Could not retrieve validator statuses: %v", err)
-	}
-
-	exitedKeys := make([][]byte, 0)
-	for _, st := range statuses {
-		s := st.Status.Status
-		if s == ethpb.ValidatorStatus_EXITED {
-			exitedKeys = append(exitedKeys, st.PublicKey)
-		}
-	}
-
-	resp := &pb.ExitedValidatorsResponse{
-		PublicKeys: exitedKeys,
-	}
-
-	return resp, nil
-}
-
 // DomainData fetches the current domain version information from the beacon state.
 func (vs *Server) DomainData(ctx context.Context, request *ethpb.DomainRequest) (*ethpb.DomainResponse, error) {
 	fork := vs.ForkFetcher.CurrentFork()
-	dv := helpers.Domain(fork, request.Epoch, request.Domain)
+	headGenesisValidatorRoot := vs.HeadFetcher.HeadGenesisValidatorRoot()
+	dv, err := helpers.Domain(fork, request.Epoch, bytesutil.ToBytes4(request.Domain), headGenesisValidatorRoot[:])
+	if err != nil {
+		return nil, err
+	}
 	return &ethpb.DomainResponse{
 		SignatureDomain: dv,
 	}, nil
@@ -191,11 +177,56 @@ func (vs *Server) WaitForChainStart(req *ptypes.Empty, stream ethpb.BeaconNodeVa
 		select {
 		case event := <-stateChannel:
 			if event.Type == statefeed.ChainStarted {
-				data := event.Data.(*statefeed.ChainStartedData)
+				data, ok := event.Data.(*statefeed.ChainStartedData)
+				if !ok {
+					return errors.New("event data is not type *statefeed.ChainStartData")
+				}
 				log.WithField("starttime", data.StartTime).Debug("Received chain started event")
 				log.Info("Sending genesis time notification to connected validator clients")
 				res := &ethpb.ChainStartResponse{
 					Started:     true,
+					GenesisTime: uint64(data.StartTime.Unix()),
+				}
+				return stream.Send(res)
+			}
+		case <-stateSub.Err():
+			return status.Error(codes.Aborted, "Subscriber closed, exiting goroutine")
+		case <-vs.Ctx.Done():
+			return status.Error(codes.Canceled, "Context canceled")
+		}
+	}
+}
+
+// WaitForSynced subscribes to the state channel and ends the stream when the state channel
+// indicates the beacon node has been initialized and is ready
+func (vs *Server) WaitForSynced(req *ptypes.Empty, stream ethpb.BeaconNodeValidator_WaitForSyncedServer) error {
+	head, err := vs.HeadFetcher.HeadState(context.Background())
+	if err != nil {
+		return status.Errorf(codes.Internal, "Could not retrieve head state: %v", err)
+	}
+	if head != nil && !vs.SyncChecker.Syncing() {
+		res := &ethpb.SyncedResponse{
+			Synced:      true,
+			GenesisTime: head.GenesisTime(),
+		}
+		return stream.Send(res)
+	}
+
+	stateChannel := make(chan *feed.Event, 1)
+	stateSub := vs.StateNotifier.StateFeed().Subscribe(stateChannel)
+	defer stateSub.Unsubscribe()
+	for {
+		select {
+		case event := <-stateChannel:
+			if event.Type == statefeed.Synced {
+				data, ok := event.Data.(*statefeed.SyncedData)
+				if !ok {
+					return errors.New("event data is not type *statefeed.SyncedData")
+				}
+				log.WithField("starttime", data.StartTime).Debug("Received sync completed event")
+				log.Info("Sending genesis time notification to connected validator clients")
+				res := &ethpb.SyncedResponse{
+					Synced:      true,
 					GenesisTime: uint64(data.StartTime.Unix()),
 				}
 				return stream.Send(res)

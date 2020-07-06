@@ -56,17 +56,17 @@ const (
 type Key struct {
 	ID uuid.UUID // Version 4 "random" for unique id not derived from key data
 
-	PublicKey *bls.PublicKey // Represents the public key of the user.
+	PublicKey bls.PublicKey // Represents the public key of the user.
 
-	SecretKey *bls.SecretKey // Represents the private key of the user.
+	SecretKey bls.SecretKey // Represents the private key of the user.
 }
 
 type keyStore interface {
-	// Loads and decrypts the key from disk.
+	// GetKey loads and decrypts the key from disk.
 	GetKey(filename string, password string) (*Key, error)
-	// Writes and encrypts the key.
+	// StoreKey writes and encrypts the key.
 	StoreKey(filename string, k *Key, auth string) error
-	// Joins filename with the key directory unless it is already absolute.
+	// JoinPath joins filename with the key directory unless it is already absolute.
 	JoinPath(filename string) string
 }
 
@@ -95,7 +95,7 @@ type cipherparamsJSON struct {
 	IV string `json:"iv"`
 }
 
-// MarshalJSON marshalls a key struct into a JSON blob.
+// MarshalJSON marshals a key struct into a JSON blob.
 func (k *Key) MarshalJSON() (j []byte, err error) {
 	jStruct := plainKeyJSON{
 		hex.EncodeToString(k.PublicKey.Marshal()),
@@ -138,7 +138,7 @@ func (k *Key) UnmarshalJSON(j []byte) (err error) {
 }
 
 // NewKeyFromBLS creates a new keystore Key type using a BLS private key.
-func NewKeyFromBLS(blsKey *bls.SecretKey) (*Key, error) {
+func NewKeyFromBLS(blsKey bls.SecretKey) (*Key, error) {
 	id := uuid.NewRandom()
 	pubkey := blsKey.PublicKey()
 	key := &Key{

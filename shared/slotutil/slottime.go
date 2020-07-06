@@ -18,6 +18,9 @@ func SlotStartTime(genesis uint64, slot uint64) time.Time {
 // SlotsSinceGenesis returns the number of slots since
 // the provided genesis time.
 func SlotsSinceGenesis(genesis time.Time) uint64 {
+	if genesis.After(roughtime.Now()) { // Genesis has not occurred yet.
+		return 0
+	}
 	return uint64(roughtime.Since(genesis).Seconds()) / params.BeaconConfig().SecondsPerSlot
 }
 
@@ -25,4 +28,12 @@ func SlotsSinceGenesis(genesis time.Time) uint64 {
 // the provided genesis time.
 func EpochsSinceGenesis(genesis time.Time) uint64 {
 	return SlotsSinceGenesis(genesis) / params.BeaconConfig().SlotsPerEpoch
+}
+
+// DivideSlotBy divides the SECONDS_PER_SLOT configuration
+// parameter by a specified number. It returns a value of time.Duration
+// in milliseconds, useful for dividing values such as 1 second into
+// millisecond-based durations.
+func DivideSlotBy(timesPerSlot int64) time.Duration {
+	return time.Duration(int64(params.BeaconConfig().SecondsPerSlot*1000)/timesPerSlot) * time.Millisecond
 }

@@ -1,4 +1,4 @@
-// Package beacon-chain defines all the utilities needed for a beacon chain node.
+// Package beacon-chain defines the entire runtime of an eth2 beacon node.
 package main
 
 import (
@@ -7,7 +7,8 @@ import (
 	"runtime"
 	runtimeDebug "runtime/debug"
 
-	golog "github.com/ipfs/go-log"
+	gethlog "github.com/ethereum/go-ethereum/log"
+	golog "github.com/ipfs/go-log/v2"
 	joonix "github.com/joonix/log"
 	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/beacon-chain/node"
@@ -17,35 +18,41 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/logutil"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
-	gologging "github.com/whyrusleeping/go-logging"
+	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v2/altsrc"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
 	_ "go.uber.org/automaxprocs"
 )
 
 var appFlags = []cli.Flag{
-	flags.NoCustomConfigFlag,
 	flags.DepositContractFlag,
-	flags.Web3ProviderFlag,
 	flags.HTTPWeb3ProviderFlag,
 	flags.RPCHost,
 	flags.RPCPort,
 	flags.CertFlag,
 	flags.KeyFlag,
+	flags.DisableGRPCGateway,
+	flags.GRPCGatewayHost,
 	flags.GRPCGatewayPort,
 	flags.MinSyncPeers,
-	flags.RPCMaxPageSize,
 	flags.ContractDeploymentBlock,
 	flags.SetGCPercent,
 	flags.UnsafeSync,
+	flags.SlasherCertFlag,
+	flags.SlasherProviderFlag,
+	flags.DisableDiscv5,
+	flags.BlockBatchLimit,
+	flags.BlockBatchLimitBurstFactor,
 	flags.InteropMockEth1DataVotesFlag,
 	flags.InteropGenesisStateFlag,
 	flags.InteropNumValidatorsFlag,
 	flags.InteropGenesisTimeFlag,
-	flags.ArchiveEnableFlag,
-	flags.ArchiveValidatorSetChangesFlag,
-	flags.ArchiveBlocksFlag,
-	flags.ArchiveAttestationsFlag,
+	flags.SlotsPerArchivedPoint,
+	flags.EnableDebugRPCEndpoints,
+	cmd.MinimalConfigFlag,
+	cmd.E2EConfigFlag,
+	cmd.CustomGenesisDelayFlag,
+	cmd.RPCMaxPageSizeFlag,
 	cmd.BootstrapNode,
 	cmd.NoDiscovery,
 	cmd.StaticPeers,
@@ -57,15 +64,17 @@ var appFlags = []cli.Flag{
 	cmd.P2PHostDNS,
 	cmd.P2PMaxPeers,
 	cmd.P2PPrivKey,
-	cmd.P2PWhitelist,
-	cmd.P2PEncoding,
+	cmd.P2PMetadata,
+	cmd.P2PAllowList,
+	cmd.P2PDenyList,
 	cmd.DataDirFlag,
 	cmd.VerbosityFlag,
 	cmd.EnableTracingFlag,
 	cmd.TracingProcessNameFlag,
 	cmd.TracingEndpointFlag,
 	cmd.TraceSampleFractionFlag,
-	cmd.MonitoringPortFlag,
+	cmd.MonitoringHostFlag,
+	flags.MonitoringPortFlag,
 	cmd.DisableMonitoringFlag,
 	cmd.ClearDB,
 	cmd.ForceClearDB,
@@ -79,15 +88,18 @@ var appFlags = []cli.Flag{
 	debug.TraceFlag,
 	cmd.LogFileName,
 	cmd.EnableUPnPFlag,
+	cmd.ConfigFileFlag,
+	cmd.ChainConfigFileFlag,
+	cmd.GrpcMaxCallRecvMsgSizeFlag,
 }
 
 func init() {
-	appFlags = append(appFlags, featureconfig.BeaconChainFlags...)
+	appFlags = cmd.WrapFlags(append(appFlags, featureconfig.BeaconChainFlags...))
 }
 
 func main() {
 	log := logrus.WithField("prefix", "main")
-	app := cli.NewApp()
+	app := cli.App{}
 	app.Name = "beacon-chain"
 	app.Usage = "this is a beacon chain implementation for Ethereum 2.0"
 	app.Action = startNode
@@ -96,7 +108,14 @@ func main() {
 	app.Flags = appFlags
 
 	app.Before = func(ctx *cli.Context) error {
-		format := ctx.GlobalString(cmd.LogFormat.Name)
+		// Load any flags from file, if specified.
+		if ctx.IsSet(cmd.ConfigFileFlag.Name) {
+			if err := altsrc.InitInputSourceWithContext(appFlags, altsrc.NewYamlSourceFromFlagFunc(cmd.ConfigFileFlag.Name))(ctx); err != nil {
+				return err
+			}
+		}
+
+		format := ctx.String(cmd.LogFormat.Name)
 		switch format {
 		case "text":
 			formatter := new(prefixed.TextFormatter)
@@ -104,24 +123,21 @@ func main() {
 			formatter.FullTimestamp = true
 			// If persistent log files are written - we disable the log messages coloring because
 			// the colors are ANSI codes and seen as gibberish in the log files.
-			formatter.DisableColors = ctx.GlobalString(cmd.LogFileName.Name) != ""
+			formatter.DisableColors = ctx.String(cmd.LogFileName.Name) != ""
 			logrus.SetFormatter(formatter)
-			break
 		case "fluentd":
 			f := joonix.NewFormatter()
 			if err := joonix.DisableTimestampFormat(f); err != nil {
 				panic(err)
 			}
 			logrus.SetFormatter(f)
-			break
 		case "json":
 			logrus.SetFormatter(&logrus.JSONFormatter{})
-			break
 		default:
 			return fmt.Errorf("unknown log format %s", format)
 		}
 
-		logFileName := ctx.GlobalString(cmd.LogFileName.Name)
+		logFileName := ctx.String(cmd.LogFileName.Name)
 		if logFileName != "" {
 			if err := logutil.ConfigurePersistentLogging(logFileName); err != nil {
 				log.WithError(err).Error("Failed to configuring logging to disk.")
@@ -129,7 +145,7 @@ func main() {
 		}
 
 		if ctx.IsSet(flags.SetGCPercent.Name) {
-			runtimeDebug.SetGCPercent(ctx.GlobalInt(flags.SetGCPercent.Name))
+			runtimeDebug.SetGCPercent(ctx.Int(flags.SetGCPercent.Name))
 		}
 		runtime.GOMAXPROCS(runtime.NumCPU())
 		return debug.Setup(ctx)
@@ -149,14 +165,19 @@ func main() {
 }
 
 func startNode(ctx *cli.Context) error {
-	verbosity := ctx.GlobalString(cmd.VerbosityFlag.Name)
+	verbosity := ctx.String(cmd.VerbosityFlag.Name)
 	level, err := logrus.ParseLevel(verbosity)
 	if err != nil {
 		return err
 	}
 	logrus.SetLevel(level)
 	if level == logrus.TraceLevel {
-		golog.SetAllLoggers(gologging.DEBUG)
+		// libp2p specific logging.
+		golog.SetAllLoggers(golog.LevelDebug)
+		// Geth specific logging.
+		glogger := gethlog.NewGlogHandler(gethlog.StreamHandler(os.Stderr, gethlog.TerminalFormat(true)))
+		glogger.Verbosity(gethlog.LvlTrace)
+		gethlog.Root().SetHandler(glogger)
 	}
 
 	beacon, err := node.NewBeaconNode(ctx)

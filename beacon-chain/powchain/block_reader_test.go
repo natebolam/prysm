@@ -16,12 +16,10 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 )
 
-var endpoint = "ws://127.0.0.1"
+var endpoint = "http://127.0.0.1"
 
 func setDefaultMocks(service *Service) *Service {
-	service.reader = &goodReader{}
-	service.blockFetcher = &goodFetcher{}
-	service.logger = &goodLogger{}
+	service.eth1DataFetcher = &goodFetcher{}
 	service.httpLogger = &goodLogger{}
 	service.stateNotifier = &goodNotifier{}
 	return service
@@ -32,10 +30,9 @@ func TestLatestMainchainInfo_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unable to set up simulated backend %v", err)
 	}
-	beaconDB := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, beaconDB)
+	beaconDB, _ := dbutil.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint:    endpoint,
+		HTTPEndPoint:    endpoint,
 		DepositContract: testAcc.ContractAddr,
 		BeaconDB:        beaconDB,
 	})
@@ -44,6 +41,7 @@ func TestLatestMainchainInfo_OK(t *testing.T) {
 	}
 	web3Service = setDefaultMocks(web3Service)
 	web3Service.rpcClient = &mockPOW.RPCClient{Backend: testAcc.Backend}
+	web3Service.eth1DataFetcher = &goodFetcher{backend: testAcc.Backend}
 
 	web3Service.depositContractCaller, err = contracts.NewDepositContractCaller(testAcc.ContractAddr, testAcc.Backend)
 	if err != nil {
@@ -58,12 +56,14 @@ func TestLatestMainchainInfo_OK(t *testing.T) {
 		<-exitRoutine
 	}()
 
-	header := &gethTypes.Header{
-		Number: big.NewInt(42),
-		Time:   308534400,
+	header, err := web3Service.eth1DataFetcher.HeaderByNumber(web3Service.ctx, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	web3Service.headerChan <- header
+	tickerChan := make(chan time.Time)
+	web3Service.headTicker = &time.Ticker{C: tickerChan}
+	tickerChan <- time.Now()
 	web3Service.cancel()
 	exitRoutine <- true
 
@@ -96,10 +96,9 @@ func TestLatestMainchainInfo_OK(t *testing.T) {
 }
 
 func TestBlockHashByHeight_ReturnsHash(t *testing.T) {
-	beaconDB := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, beaconDB)
+	beaconDB, _ := dbutil.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint: endpoint,
+		HTTPEndPoint: endpoint,
 		BeaconDB:     beaconDB,
 	})
 	if err != nil {
@@ -138,10 +137,9 @@ func TestBlockHashByHeight_ReturnsHash(t *testing.T) {
 }
 
 func TestBlockExists_ValidHash(t *testing.T) {
-	beaconDB := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, beaconDB)
+	beaconDB, _ := dbutil.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint: endpoint,
+		HTTPEndPoint: endpoint,
 		BeaconDB:     beaconDB,
 	})
 	if err != nil {
@@ -180,10 +178,9 @@ func TestBlockExists_ValidHash(t *testing.T) {
 }
 
 func TestBlockExists_InvalidHash(t *testing.T) {
-	beaconDB := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, beaconDB)
+	beaconDB, _ := dbutil.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint: endpoint,
+		HTTPEndPoint: endpoint,
 		BeaconDB:     beaconDB,
 	})
 	if err != nil {
@@ -198,17 +195,16 @@ func TestBlockExists_InvalidHash(t *testing.T) {
 }
 
 func TestBlockExists_UsesCachedBlockInfo(t *testing.T) {
-	beaconDB := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, beaconDB)
+	beaconDB, _ := dbutil.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint: endpoint,
+		HTTPEndPoint: endpoint,
 		BeaconDB:     beaconDB,
 	})
 	if err != nil {
 		t.Fatalf("unable to setup web3 ETH1.0 chain service: %v", err)
 	}
-	// nil blockFetcher would panic if cached value not used
-	web3Service.blockFetcher = nil
+	// nil eth1DataFetcher would panic if cached value not used
+	web3Service.eth1DataFetcher = nil
 
 	block := gethTypes.NewBlock(
 		&gethTypes.Header{
@@ -237,17 +233,15 @@ func TestBlockExists_UsesCachedBlockInfo(t *testing.T) {
 }
 
 func TestBlockNumberByTimestamp(t *testing.T) {
-	beaconDB := dbutil.SetupDB(t)
-	defer dbutil.TeardownDB(t, beaconDB)
+	beaconDB, _ := dbutil.SetupDB(t)
 	web3Service, err := NewService(context.Background(), &Web3ServiceConfig{
-		ETH1Endpoint: endpoint,
+		HTTPEndPoint: endpoint,
 		BeaconDB:     beaconDB,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	web3Service = setDefaultMocks(web3Service)
-	web3Service.client = nil
 
 	ctx := context.Background()
 	bn, err := web3Service.BlockNumberByTimestamp(ctx, 150000 /* time */)

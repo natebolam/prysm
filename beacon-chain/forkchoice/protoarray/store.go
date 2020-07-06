@@ -18,12 +18,12 @@ var lastHeadRoot [32]byte
 // New initializes a new fork choice store.
 func New(justifiedEpoch uint64, finalizedEpoch uint64, finalizedRoot [32]byte) *ForkChoice {
 	s := &Store{
-		justifiedEpoch: justifiedEpoch,
-		finalizedEpoch: finalizedEpoch,
+		JustifiedEpoch: justifiedEpoch,
+		FinalizedEpoch: finalizedEpoch,
 		finalizedRoot:  finalizedRoot,
-		nodes:          make([]*Node, 0),
-		nodeIndices:    make(map[[32]byte]uint64),
-		pruneThreshold: defaultPruneThreshold,
+		Nodes:          make([]*Node, 0),
+		NodeIndices:    make(map[[32]byte]uint64),
+		PruneThreshold: defaultPruneThreshold,
 	}
 
 	b := make([]uint64, 0)
@@ -45,7 +45,7 @@ func (f *ForkChoice) Head(ctx context.Context, justifiedEpoch uint64, justifiedR
 	// The only time it writes to node indices is inserting and pruning blocks from the store.
 	f.store.nodeIndicesLock.RLock()
 	defer f.store.nodeIndicesLock.RUnlock()
-	deltas, newVotes, err := computeDeltas(ctx, f.store.nodeIndices, f.votes, f.balances, newBalances)
+	deltas, newVotes, err := computeDeltas(ctx, f.store.NodeIndices, f.votes, f.balances, newBalances)
 	if err != nil {
 		return [32]byte{}, errors.Wrap(err, "Could not compute deltas")
 	}
@@ -86,11 +86,11 @@ func (f *ForkChoice) ProcessAttestation(ctx context.Context, validatorIndices []
 }
 
 // ProcessBlock processes a new block by inserting it to the fork choice store.
-func (f *ForkChoice) ProcessBlock(ctx context.Context, slot uint64, blockRoot [32]byte, parentRoot [32]byte, justifiedEpoch uint64, finalizedEpoch uint64) error {
+func (f *ForkChoice) ProcessBlock(ctx context.Context, slot uint64, blockRoot [32]byte, parentRoot [32]byte, graffiti [32]byte, justifiedEpoch uint64, finalizedEpoch uint64) error {
 	ctx, span := trace.StartSpan(ctx, "protoArrayForkChoice.ProcessBlock")
 	defer span.End()
 
-	return f.store.insert(ctx, slot, blockRoot, parentRoot, justifiedEpoch, finalizedEpoch)
+	return f.store.insert(ctx, slot, blockRoot, parentRoot, graffiti, justifiedEpoch, finalizedEpoch)
 }
 
 // Prune prunes the fork choice store with the new finalized root. The store is only pruned if the input
@@ -101,9 +101,19 @@ func (f *ForkChoice) Prune(ctx context.Context, finalizedRoot [32]byte) error {
 
 // Nodes returns the copied list of block nodes in the fork choice store.
 func (f *ForkChoice) Nodes() []*Node {
-	cpy := make([]*Node, len(f.store.nodes))
-	copy(cpy, f.store.nodes)
+	f.store.nodeIndicesLock.RLock()
+	defer f.store.nodeIndicesLock.RUnlock()
+
+	cpy := make([]*Node, len(f.store.Nodes))
+	copy(cpy, f.store.Nodes)
 	return cpy
+}
+
+// Store returns the fork choice store object which contains all the information regarding proto array fork choice.
+func (f *ForkChoice) Store() *Store {
+	f.store.nodeIndicesLock.Lock()
+	defer f.store.nodeIndicesLock.Unlock()
+	return f.store
 }
 
 // Node returns the copied node in the fork choice store.
@@ -111,12 +121,12 @@ func (f *ForkChoice) Node(root [32]byte) *Node {
 	f.store.nodeIndicesLock.RLock()
 	defer f.store.nodeIndicesLock.RUnlock()
 
-	index, ok := f.store.nodeIndices[root]
+	index, ok := f.store.NodeIndices[root]
 	if !ok {
 		return nil
 	}
 
-	return copyNode(f.store.nodes[index])
+	return copyNode(f.store.Nodes[index])
 }
 
 // HasNode returns true if the node exists in fork choice store,
@@ -125,6 +135,6 @@ func (f *ForkChoice) HasNode(root [32]byte) bool {
 	f.store.nodeIndicesLock.RLock()
 	defer f.store.nodeIndicesLock.RUnlock()
 
-	_, ok := f.store.nodeIndices[root]
+	_, ok := f.store.NodeIndices[root]
 	return ok
 }

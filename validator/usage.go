@@ -9,7 +9,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/validator/flags"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 var appHelpTemplate = `NAME:
@@ -44,6 +44,8 @@ var appHelpFlagGroups = []flagGroup{
 	{
 		Name: "cmd",
 		Flags: []cli.Flag{
+			cmd.MinimalConfigFlag,
+			cmd.E2EConfigFlag,
 			cmd.VerbosityFlag,
 			cmd.DataDirFlag,
 			cmd.ClearDB,
@@ -52,11 +54,13 @@ var appHelpFlagGroups = []flagGroup{
 			cmd.TracingProcessNameFlag,
 			cmd.TracingEndpointFlag,
 			cmd.TraceSampleFractionFlag,
-			cmd.BootstrapNode,
-			cmd.MonitoringPortFlag,
+			cmd.MonitoringHostFlag,
+			flags.MonitoringPortFlag,
 			cmd.LogFormat,
 			cmd.LogFileName,
-			cmd.EnableUPnPFlag,
+			cmd.ConfigFileFlag,
+			cmd.ChainConfigFileFlag,
+			cmd.GrpcMaxCallRecvMsgSizeFlag,
 		},
 	},
 	{
@@ -73,7 +77,6 @@ var appHelpFlagGroups = []flagGroup{
 	{
 		Name: "validator",
 		Flags: []cli.Flag{
-			flags.NoCustomConfigFlag,
 			flags.BeaconRPCProviderFlag,
 			flags.CertFlag,
 			flags.KeyManager,
@@ -83,14 +86,19 @@ var appHelpFlagGroups = []flagGroup{
 			flags.DisablePenaltyRewardLogFlag,
 			flags.UnencryptedKeysFlag,
 			flags.GraffitiFlag,
-			flags.GrpcMaxCallRecvMsgSizeFlag,
 			flags.GrpcRetriesFlag,
-			flags.AccountMetricsFlag,
+			flags.GrpcHeadersFlag,
+			flags.SlasherRPCProviderFlag,
+			flags.SlasherCertFlag,
+			flags.SourceDirectories,
+			flags.SourceDirectory,
+			flags.TargetDirectory,
+			flags.DisableAccountMetricsFlag,
 		},
 	},
 	{
 		Name:  "features",
-		Flags: featureconfig.ValidatorFlags,
+		Flags: featureconfig.ActiveFlags(featureconfig.ValidatorFlags),
 	},
 	{
 		Name: "interop",

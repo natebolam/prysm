@@ -7,8 +7,9 @@ import (
 
 	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/debug"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/slasher/flags"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 var appHelpTemplate = `NAME:
@@ -43,18 +44,22 @@ var appHelpFlagGroups = []flagGroup{
 	{
 		Name: "cmd",
 		Flags: []cli.Flag{
+			cmd.MinimalConfigFlag,
+			cmd.E2EConfigFlag,
+			cmd.RPCMaxPageSizeFlag,
 			cmd.VerbosityFlag,
 			cmd.DataDirFlag,
 			cmd.EnableTracingFlag,
 			cmd.TracingProcessNameFlag,
 			cmd.TracingEndpointFlag,
 			cmd.TraceSampleFractionFlag,
-			cmd.BootstrapNode,
-			cmd.MonitoringPortFlag,
+			cmd.MonitoringHostFlag,
+			flags.MonitoringPortFlag,
 			cmd.LogFormat,
 			cmd.LogFileName,
 			cmd.ForceClearDB,
 			cmd.ClearDB,
+			cmd.ConfigFileFlag,
 		},
 	},
 	{
@@ -72,12 +77,17 @@ var appHelpFlagGroups = []flagGroup{
 		Name: "slasher",
 		Flags: []cli.Flag{
 			flags.BeaconCertFlag,
+			flags.CertFlag,
 			flags.KeyFlag,
 			flags.RPCPort,
-			flags.UseSpanCacheFlag,
+			flags.RPCHost,
 			flags.RebuildSpanMapsFlag,
 			flags.BeaconRPCProviderFlag,
 		},
+	},
+	{
+		Name:  "features",
+		Flags: featureconfig.ActiveFlags(featureconfig.SlasherFlags),
 	},
 }
 

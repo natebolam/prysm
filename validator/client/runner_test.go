@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	pb "github.com/prysmaticlabs/prysm/proto/beacon/rpc/v1"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 	logTest "github.com/sirupsen/logrus/hooks/test"
 )
@@ -30,6 +30,19 @@ func TestCancelledContext_WaitsForChainStart(t *testing.T) {
 	run(cancelledContext(), v)
 	if !v.WaitForChainStartCalled {
 		t.Error("Expected WaitForChainStart() to be called")
+	}
+}
+
+func TestCancelledContext_WaitsForSynced(t *testing.T) {
+	cfg := &featureconfig.Flags{
+		WaitForSynced: true,
+	}
+	reset := featureconfig.InitWithReset(cfg)
+	defer reset()
+	v := &fakeValidator{}
+	run(cancelledContext(), v)
+	if !v.WaitForSyncedCalled {
+		t.Error("Expected WaitForSynced() to be called")
 	}
 }
 
@@ -114,7 +127,7 @@ func TestAttests_NextSlot(t *testing.T) {
 	slot := uint64(55)
 	ticker := make(chan uint64)
 	v.NextSlotRet = ticker
-	v.RolesAtRet = []pb.ValidatorRole{pb.ValidatorRole_ATTESTER}
+	v.RolesAtRet = []validatorRole{roleAttester}
 	go func() {
 		ticker <- slot
 
@@ -138,7 +151,7 @@ func TestProposes_NextSlot(t *testing.T) {
 	slot := uint64(55)
 	ticker := make(chan uint64)
 	v.NextSlotRet = ticker
-	v.RolesAtRet = []pb.ValidatorRole{pb.ValidatorRole_PROPOSER}
+	v.RolesAtRet = []validatorRole{roleProposer}
 	go func() {
 		ticker <- slot
 
@@ -162,7 +175,7 @@ func TestBothProposesAndAttests_NextSlot(t *testing.T) {
 	slot := uint64(55)
 	ticker := make(chan uint64)
 	v.NextSlotRet = ticker
-	v.RolesAtRet = []pb.ValidatorRole{pb.ValidatorRole_ATTESTER, pb.ValidatorRole_PROPOSER}
+	v.RolesAtRet = []validatorRole{roleAttester, roleProposer}
 	go func() {
 		ticker <- slot
 

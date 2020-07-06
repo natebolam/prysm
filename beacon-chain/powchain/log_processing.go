@@ -18,11 +18,10 @@ import (
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
-	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	contracts "github.com/prysmaticlabs/prysm/contracts/deposit-contract"
 	protodb "github.com/prysmaticlabs/prysm/proto/beacon/db"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"github.com/prysmaticlabs/prysm/shared/cmd"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/sirupsen/logrus"
@@ -34,7 +33,7 @@ var (
 
 const eth1LookBackPeriod = 100
 const eth1DataSavingInterval = 100
-const eth1HeaderReqLimit = 2000
+const eth1HeaderReqLimit = 1000
 const depositlogRequestLimit = 10000
 
 // Eth2GenesisPowchainInfo retrieves the genesis time and eth1 block number of the beacon chain
@@ -156,13 +155,12 @@ func (s *Service) ProcessDepositLog(ctx context.Context, depositLog gethTypes.Lo
 
 	// Make sure duplicates are rejected pre-chainstart.
 	if !s.chainStartData.Chainstarted {
-		var pubkey = fmt.Sprintf("#%x", depositData.PublicKey)
+		var pubkey = fmt.Sprintf("%#x", depositData.PublicKey)
 		if s.depositCache.PubkeyInChainstart(ctx, pubkey) {
-			log.Warnf("Pubkey %#x has already been submitted for chainstart", pubkey)
+			log.WithField("publicKey", pubkey).Debug("Pubkey has already been submitted for chainstart")
 		} else {
 			s.depositCache.MarkPubkeyForChainstart(ctx, pubkey)
 		}
-
 	}
 
 	// We always store all historical deposits in the DB.
@@ -184,6 +182,7 @@ func (s *Service) ProcessDepositLog(ctx context.Context, depositLog gethTypes.Lo
 	}
 	if validData {
 		log.WithFields(logrus.Fields{
+			"eth1Block":       depositLog.BlockNumber,
 			"publicKey":       fmt.Sprintf("%#x", depositData.PublicKey),
 			"merkleTreeIndex": index,
 		}).Debug("Deposit registered from deposit contract")
@@ -192,7 +191,14 @@ func (s *Service) ProcessDepositLog(ctx context.Context, depositLog gethTypes.Lo
 		if !s.chainStartData.Chainstarted {
 			deposits := len(s.chainStartData.ChainstartDeposits)
 			if deposits%512 == 0 {
-				log.WithField("deposits", deposits).Info("Processing deposits from Ethereum 1 chain")
+				valCount, err := helpers.ActiveValidatorCount(s.preGenesisState, 0)
+				if err != nil {
+					log.WithError(err).Error("Could not determine active validator count from pre genesis state")
+				}
+				log.WithFields(logrus.Fields{
+					"deposits":          deposits,
+					"genesisValidators": valCount,
+				}).Info("Processing deposits from Ethereum 1 chain")
 			}
 		}
 	} else {
@@ -240,19 +246,16 @@ func (s *Service) ProcessChainStart(genesisTime uint64, eth1BlockHash [32]byte, 
 }
 
 func (s *Service) createGenesisTime(timeStamp uint64) uint64 {
-	if featureconfig.Get().CustomGenesisDelay == 0 {
-		return timeStamp
-	}
-	timeStampRdDown := timeStamp - timeStamp%featureconfig.Get().CustomGenesisDelay
-	// genesisTime will be set to the first second of the day, two days after it was triggered.
-	return timeStampRdDown + 2*featureconfig.Get().CustomGenesisDelay
+	// adds in the genesis delay to the eth1 block time
+	// on which it was triggered.
+	return timeStamp + cmd.Get().CustomGenesisDelay
 }
 
 // processPastLogs processes all the past logs from the deposit contract and
 // updates the deposit trie with the data from each individual log.
 func (s *Service) processPastLogs(ctx context.Context) error {
 	currentBlockNum := s.latestEth1Data.LastRequestedBlock
-	deploymentBlock := int64(flags.Get().DeploymentBlock)
+	deploymentBlock := int64(params.BeaconNetworkConfig().ContractDeploymentBlock)
 	if uint64(deploymentBlock) > currentBlockNum {
 		currentBlockNum = uint64(deploymentBlock)
 	}
@@ -278,16 +281,19 @@ func (s *Service) processPastLogs(ctx context.Context) error {
 		}
 		return nil
 	}
-
-	for currentBlockNum < s.LatestBlockHeight().Uint64() {
+	latestFollowHeight, err := s.followBlockHeight(ctx)
+	if err != nil {
+		return err
+	}
+	for currentBlockNum < latestFollowHeight {
 		// stop requesting, if we have all the logs
 		if logCount == uint64(s.lastReceivedMerkleIndex+1) {
 			break
 		}
 		start := currentBlockNum
 		end := currentBlockNum + eth1HeaderReqLimit
-		if end > s.LatestBlockHeight().Uint64() {
-			end = s.LatestBlockHeight().Uint64()
+		if end > latestFollowHeight {
+			end = latestFollowHeight
 		}
 		query := ethereum.FilterQuery{
 			Addresses: []common.Address{
@@ -297,9 +303,10 @@ func (s *Service) processPastLogs(ctx context.Context) error {
 			ToBlock:   big.NewInt(int64(end)),
 		}
 		remainingLogs := logCount - uint64(s.lastReceivedMerkleIndex+1)
-		if remainingLogs < depositlogRequestLimit {
-			query.ToBlock = s.LatestBlockHeight()
-			end = s.LatestBlockHeight().Uint64()
+		// only change the end block if the remaining logs are below the required log limit.
+		if remainingLogs < depositlogRequestLimit && end >= latestFollowHeight {
+			query.ToBlock = big.NewInt(int64(latestFollowHeight))
+			end = latestFollowHeight
 		}
 		logs, err := s.httpLogger.FilterLogs(ctx, query)
 		if err != nil {
@@ -349,7 +356,10 @@ func (s *Service) requestBatchedLogs(ctx context.Context) error {
 	// We request for the nth block behind the current head, in order to have
 	// stabilized logs when we retrieve it from the 1.0 chain.
 
-	requestedBlock := s.latestEth1Data.BlockHeight - uint64(params.BeaconConfig().LogBlockDelay)
+	requestedBlock, err := s.followBlockHeight(ctx)
+	if err != nil {
+		return err
+	}
 	for i := s.latestEth1Data.LastRequestedBlock + 1; i <= requestedBlock; i++ {
 		err := s.ProcessETH1Block(ctx, big.NewInt(int64(i)))
 		if err != nil {
@@ -448,7 +458,10 @@ func (s *Service) checkHeaderRange(start uint64, end uint64,
 }
 
 func (s *Service) checkForChainstart(blockHash [32]byte, blockNumber *big.Int, blockTime uint64) {
-	valCount, _ := helpers.ActiveValidatorCount(s.preGenesisState, 0)
+	valCount, err := helpers.ActiveValidatorCount(s.preGenesisState, 0)
+	if err != nil {
+		log.WithError(err).Error("Could not determine active validator count from pref genesis state")
+	}
 	triggered := state.IsValidGenesisState(valCount, s.createGenesisTime(blockTime))
 	if triggered {
 		s.chainStartData.GenesisTime = s.createGenesisTime(blockTime)

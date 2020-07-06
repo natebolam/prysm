@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"context"
 	"reflect"
 	"sync"
@@ -10,12 +11,15 @@ import (
 	"github.com/kevinms/leakybucket-go"
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/protocol"
+	"github.com/protolambda/zssz"
+	"github.com/protolambda/zssz/types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-ssz"
 	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	db "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
 	p2ptest "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
 )
@@ -24,11 +28,10 @@ func TestRecentBeaconBlocksRPCHandler_ReturnsBlocks(t *testing.T) {
 	p1 := p2ptest.NewTestP2P(t)
 	p2 := p2ptest.NewTestP2P(t)
 	p1.Connect(p2)
-	if len(p1.Host.Network().Peers()) != 1 {
+	if len(p1.BHost.Network().Peers()) != 1 {
 		t.Error("Expected peers to be connected")
 	}
-	d := db.SetupDB(t)
-	defer db.TeardownDB(t, d)
+	d, _ := db.SetupDB(t)
 
 	var blkRoots [][32]byte
 	// Populate the database with blocks that would match the request.
@@ -51,12 +54,12 @@ func TestRecentBeaconBlocksRPCHandler_ReturnsBlocks(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
-	p2.Host.SetStreamHandler(pcl, func(stream network.Stream) {
+	p2.BHost.SetStreamHandler(pcl, func(stream network.Stream) {
 		defer wg.Done()
 		for i := range blkRoots {
 			expectSuccess(t, r, stream)
 			res := &ethpb.SignedBeaconBlock{}
-			if err := r.p2p.Encoding().DecodeWithLength(stream, &res); err != nil {
+			if err := r.p2p.Encoding().DecodeWithMaxLength(stream, &res); err != nil {
 				t.Error(err)
 			}
 			if res.Block.Slot != uint64(i+1) {
@@ -65,11 +68,10 @@ func TestRecentBeaconBlocksRPCHandler_ReturnsBlocks(t *testing.T) {
 		}
 	})
 
-	stream1, err := p1.Host.NewStream(context.Background(), p2.Host.ID(), pcl)
+	stream1, err := p1.BHost.NewStream(context.Background(), p2.BHost.ID(), pcl)
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	err = r.beaconBlocksRootRPCHandler(context.Background(), blkRoots, stream1)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
@@ -88,11 +90,11 @@ func TestRecentBeaconBlocks_RPCRequestSent(t *testing.T) {
 	blockA := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: 111}}
 	blockB := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{Slot: 40}}
 	// Set up a head state with data we expect.
-	blockARoot, err := ssz.HashTreeRoot(blockA.Block)
+	blockARoot, err := stateutil.BlockRoot(blockA.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blockBRoot, err := ssz.HashTreeRoot(blockB.Block)
+	blockBRoot, err := stateutil.BlockRoot(blockB.Block)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,13 +129,13 @@ func TestRecentBeaconBlocks_RPCRequestSent(t *testing.T) {
 	}
 
 	// Setup streams
-	pcl := protocol.ID("/eth2/beacon_chain/req/beacon_blocks_by_root/1/ssz")
+	pcl := protocol.ID("/eth2/beacon_chain/req/beacon_blocks_by_root/1/ssz_snappy")
 	var wg sync.WaitGroup
 	wg.Add(1)
-	p2.Host.SetStreamHandler(pcl, func(stream network.Stream) {
+	p2.BHost.SetStreamHandler(pcl, func(stream network.Stream) {
 		defer wg.Done()
 		out := [][32]byte{}
-		if err := p2.Encoding().DecodeWithLength(stream, &out); err != nil {
+		if err := p2.Encoding().DecodeWithMaxLength(stream, &out); err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(out, expectedRoots) {
@@ -144,7 +146,7 @@ func TestRecentBeaconBlocks_RPCRequestSent(t *testing.T) {
 			if _, err := stream.Write([]byte{responseCodeSuccess}); err != nil {
 				t.Fatalf("Failed to write to stream: %v", err)
 			}
-			_, err := p2.Encoding().EncodeWithLength(stream, blk)
+			_, err := p2.Encoding().EncodeWithMaxLength(stream, blk)
 			if err != nil {
 				t.Errorf("Could not send response back: %v ", err)
 			}
@@ -158,5 +160,35 @@ func TestRecentBeaconBlocks_RPCRequestSent(t *testing.T) {
 
 	if testutil.WaitTimeout(&wg, 1*time.Second) {
 		t.Fatal("Did not receive stream within 1 sec")
+	}
+}
+
+type testList [][32]byte
+
+func (*testList) Limit() uint64 {
+	return 2 << 10
+}
+
+func TestSSZCompatibility(t *testing.T) {
+	rootA := [32]byte{'a'}
+	rootB := [32]byte{'B'}
+	rootC := [32]byte{'C'}
+	list := testList{rootA, rootB, rootC}
+	writer := bytes.NewBuffer([]byte{})
+	sszType, err := types.SSZFactory(reflect.TypeOf(list))
+	if err != nil {
+		t.Error(err)
+	}
+	n, err := zssz.Encode(writer, list, sszType)
+	if err != nil {
+		t.Error(err)
+	}
+	encodedPart := writer.Bytes()[:n]
+	fastSSZ, err := ssz.Marshal(list)
+	if err != nil {
+		t.Error(err)
+	}
+	if !bytes.Equal(fastSSZ, encodedPart) {
+		t.Errorf("Wanted the same result as ZSSZ of %#x but got %#X", encodedPart, fastSSZ)
 	}
 }

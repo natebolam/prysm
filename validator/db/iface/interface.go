@@ -1,10 +1,11 @@
-// Package iface exists to prevent circular dependencies when implementing the database interface.
+// Package iface defines an interface for the validator database.
 package iface
 
 import (
 	"context"
 	"io"
 
+	"github.com/prysmaticlabs/go-bitfield"
 	slashpb "github.com/prysmaticlabs/prysm/proto/slashing"
 )
 
@@ -14,11 +15,11 @@ type ValidatorDB interface {
 	DatabasePath() string
 	ClearDB() error
 	// Proposer protection related methods.
-	ProposalHistory(ctx context.Context, publicKey []byte) (*slashpb.ProposalHistory, error)
-	SaveProposalHistory(ctx context.Context, publicKey []byte, history *slashpb.ProposalHistory) error
+	ProposalHistoryForEpoch(ctx context.Context, publicKey []byte, epoch uint64) (bitfield.Bitlist, error)
+	SaveProposalHistoryForEpoch(ctx context.Context, publicKey []byte, epoch uint64, history bitfield.Bitlist) error
 	DeleteProposalHistory(ctx context.Context, publicKey []byte) error
 	// Attester protection related methods.
-	AttestationHistory(ctx context.Context, publicKey []byte) (*slashpb.AttestationHistory, error)
-	SaveAttestationHistory(ctx context.Context, publicKey []byte, history *slashpb.AttestationHistory) error
+	AttestationHistoryForPubKeys(ctx context.Context, publicKeys [][48]byte) (map[[48]byte]*slashpb.AttestationHistory, error)
+	SaveAttestationHistoryForPubKeys(ctx context.Context, historyByPubKey map[[48]byte]*slashpb.AttestationHistory) error
 	DeleteAttestationHistory(ctx context.Context, publicKey []byte) error
 }

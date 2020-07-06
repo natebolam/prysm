@@ -2,76 +2,27 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/go-bitfield"
-	"github.com/prysmaticlabs/go-ssz"
-	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
+	chainMock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	dbtest "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/attestations"
-	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
-	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
-	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/testutil"
-	"github.com/sirupsen/logrus"
-	logTest "github.com/sirupsen/logrus/hooks/test"
 )
-
-func init() {
-	logrus.SetLevel(logrus.DebugLevel)
-}
-
-func TestRegularSyncBeaconBlockSubscriber_FilterByFinalizedEpoch(t *testing.T) {
-	hook := logTest.NewGlobal()
-	db := dbtest.SetupDB(t)
-	defer dbtest.TeardownDB(t, db)
-
-	s, err := stateTrie.InitializeFromProto(&pb.BeaconState{
-		FinalizedCheckpoint: &ethpb.Checkpoint{Epoch: 1},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	parent := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{}}
-	if err := db.SaveBlock(context.Background(), parent); err != nil {
-		t.Fatal(err)
-	}
-	parentRoot, _ := ssz.HashTreeRoot(parent.Block)
-	chain := &mock.ChainService{State: s}
-	r := &Service{
-		db:            db,
-		chain:         chain,
-		blockNotifier: chain.BlockNotifier(),
-		attPool:       attestations.NewPool(),
-	}
-
-	b := &ethpb.SignedBeaconBlock{
-		Block: &ethpb.BeaconBlock{Slot: 1, ParentRoot: parentRoot[:], Body: &ethpb.BeaconBlockBody{}},
-	}
-	if err := r.beaconBlockSubscriber(context.Background(), b); err != nil {
-		t.Fatal(err)
-	}
-	testutil.AssertLogsContain(t, hook, fmt.Sprintf("Received a block older than finalized checkpoint, 1 < %d", params.BeaconConfig().SlotsPerEpoch))
-
-	hook.Reset()
-	b.Block.Slot = params.BeaconConfig().SlotsPerEpoch
-	if err := r.beaconBlockSubscriber(context.Background(), b); err != nil {
-		t.Fatal(err)
-	}
-	testutil.AssertLogsDoNotContain(t, hook, "Received a block older than finalized checkpoint")
-}
 
 func TestDeleteAttsInPool(t *testing.T) {
 	r := &Service{
 		attPool: attestations.NewPool(),
 	}
-	att1 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1101}}
-	att2 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1110}}
-	att3 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1011}}
-	att4 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1001}}
+	data := &ethpb.AttestationData{}
+	att1 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1101}, Data: data}
+	att2 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1110}, Data: data}
+	att3 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1011}, Data: data}
+	att4 := &ethpb.Attestation{AggregationBits: bitfield.Bitlist{0b1001}, Data: data}
 	if err := r.attPool.SaveAggregatedAttestation(att1); err != nil {
 		t.Fatal(err)
 	}
@@ -93,5 +44,85 @@ func TestDeleteAttsInPool(t *testing.T) {
 	// Only 2 should remain.
 	if !reflect.DeepEqual(r.attPool.AggregatedAttestations(), []*ethpb.Attestation{att2}) {
 		t.Error("Did not get wanted attestation from pool")
+	}
+}
+
+func TestService_beaconBlockSubscriber(t *testing.T) {
+	pooledAttestations := []*ethpb.Attestation{
+		// Aggregated.
+		{
+			AggregationBits: bitfield.Bitlist{0b00011111},
+			Data:            &ethpb.AttestationData{},
+		},
+		// Unaggregated.
+		{
+			AggregationBits: bitfield.Bitlist{0b00010001},
+			Data:            &ethpb.AttestationData{},
+		},
+	}
+
+	type args struct {
+		msg proto.Message
+	}
+	tests := []struct {
+		name    string
+		args    args
+		wantErr bool
+		check   func(*testing.T, *Service)
+	}{
+		{
+			name: "invalid block does not remove attestations",
+			args: args{
+				msg: &ethpb.SignedBeaconBlock{
+					Block: &ethpb.BeaconBlock{
+						// An empty block will return an err in mocked chainService.ReceiveBlockNoPubsub.
+						Body: &ethpb.BeaconBlockBody{Attestations: pooledAttestations},
+					},
+				},
+			},
+			wantErr: true,
+			check: func(t *testing.T, s *Service) {
+				if s.attPool.AggregatedAttestationCount() == 0 {
+					t.Error("Expected at least 1 aggregated attestation in the pool")
+				}
+				if s.attPool.UnaggregatedAttestationCount() == 0 {
+					t.Error("Expected at least 1 unaggregated attestation in the pool")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, _ := dbtest.SetupDB(t)
+			s := &Service{
+				chain: &chainMock.ChainService{
+					DB: db,
+				},
+				attPool: attestations.NewPool(),
+			}
+			if err := s.initCaches(); err != nil {
+				t.Error(err)
+			}
+			// Set up attestation pool.
+			for _, att := range pooledAttestations {
+				if helpers.IsAggregated(att) {
+					if err := s.attPool.SaveAggregatedAttestation(att); err != nil {
+						t.Error(err)
+					}
+				} else {
+					if err := s.attPool.SaveUnaggregatedAttestation(att); err != nil {
+						t.Error(err)
+					}
+				}
+			}
+			// Perform method under test call.
+			if err := s.beaconBlockSubscriber(context.Background(), tt.args.msg); (err != nil) != tt.wantErr {
+				t.Errorf("beaconBlockSubscriber(ctx, msg) error = %v, wantErr %v", err, tt.wantErr)
+			}
+			// Perform any test check.
+			if tt.check != nil {
+				tt.check(t, s)
+			}
+		})
 	}
 }

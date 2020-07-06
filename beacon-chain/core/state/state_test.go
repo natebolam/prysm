@@ -29,7 +29,7 @@ func TestGenesisBeaconState_OK(t *testing.T) {
 	if params.BeaconConfig().EpochsPerHistoricalVector != 65536 {
 		t.Error("EpochsPerHistoricalVector should be 8192 for these tests to pass")
 	}
-	latestRandaoMixesLength := int(params.BeaconConfig().EpochsPerHistoricalVector)
+	latestRandaoMixesLength := params.BeaconConfig().EpochsPerHistoricalVector
 
 	if params.BeaconConfig().HistoricalRootsLimit != 16777216 {
 		t.Error("HistoricalRootsLimit should be 16777216 for these tests to pass")
@@ -42,7 +42,10 @@ func TestGenesisBeaconState_OK(t *testing.T) {
 	}
 
 	genesisTime := uint64(99999)
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(uint64(depositsForChainStart))
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(uint64(depositsForChainStart))
+	if err != nil {
+		t.Fatal(err)
+	}
 	eth1Data, err := testutil.DeterministicEth1Data(len(deposits))
 	if err != nil {
 		t.Fatal(err)
@@ -68,10 +71,18 @@ func TestGenesisBeaconState_OK(t *testing.T) {
 	if len(newState.Validators()) != depositsForChainStart {
 		t.Error("Validators was not correctly initialized")
 	}
-	if v, _ := newState.ValidatorAtIndex(0); v.ActivationEpoch != 0 {
+	v, err := newState.ValidatorAtIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ActivationEpoch != 0 {
 		t.Error("Validators was not correctly initialized")
 	}
-	if v, _ := newState.ValidatorAtIndex(0); v.ActivationEligibilityEpoch != 0 {
+	v, err = newState.ValidatorAtIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ActivationEligibilityEpoch != 0 {
 		t.Error("Validators was not correctly initialized")
 	}
 	if len(newState.Balances()) != depositsForChainStart {
@@ -79,10 +90,14 @@ func TestGenesisBeaconState_OK(t *testing.T) {
 	}
 
 	// Randomness and committees fields checks.
-	if len(newState.RandaoMixes()) != latestRandaoMixesLength {
+	if uint64(len(newState.RandaoMixes())) != latestRandaoMixesLength {
 		t.Error("Length of RandaoMixes was not correctly initialized")
 	}
-	if mix, _ := newState.RandaoMixAtIndex(0); !bytes.Equal(mix, eth1Data.BlockHash) {
+	mix, err := newState.RandaoMixAtIndex(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(mix, eth1Data.BlockHash) {
 		t.Error("RandaoMixes was not correctly initialized")
 	}
 
@@ -130,7 +145,10 @@ func TestGenesisBeaconState_OK(t *testing.T) {
 }
 
 func TestGenesisState_HashEquality(t *testing.T) {
-	deposits, _, _ := testutil.DeterministicDepositsAndKeys(100)
+	deposits, _, err := testutil.DeterministicDepositsAndKeys(100)
+	if err != nil {
+		t.Fatal(err)
+	}
 	state1, err := state.GenesisBeaconState(deposits, 0, &ethpb.Eth1Data{BlockHash: make([]byte, 32)})
 	if err != nil {
 		t.Error(err)
@@ -157,12 +175,12 @@ func TestGenesisState_InitializesLatestBlockHashes(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	got, want := len(s.BlockRoots()), int(params.BeaconConfig().SlotsPerHistoricalRoot)
+	got, want := uint64(len(s.BlockRoots())), params.BeaconConfig().SlotsPerHistoricalRoot
 	if want != got {
 		t.Errorf("Wrong number of recent block hashes. Got: %d Want: %d", got, want)
 	}
 
-	got = cap(s.BlockRoots())
+	got = uint64(cap(s.BlockRoots()))
 	if want != got {
 		t.Errorf("The slice underlying array capacity is wrong. Got: %d Want: %d", got, want)
 	}

@@ -1,16 +1,21 @@
+// Package kv defines a bolt-db, key-value store implementation
+// of the Database interface defined by a Prysm beacon node.
 package kv
 
 import (
 	"os"
 	"path"
+	"sync"
 	"time"
 
-	"github.com/boltdb/bolt"
 	"github.com/dgraph-io/ristretto"
-	"github.com/mdlayher/prombolt"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
+	prombolt "github.com/prysmaticlabs/prombbolt"
+	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db/iface"
+	"github.com/prysmaticlabs/prysm/shared/params"
+	bolt "go.etcd.io/bbolt"
 )
 
 var _ = iface.Database(&Store{})
@@ -35,17 +40,20 @@ type Store struct {
 	databasePath        string
 	blockCache          *ristretto.Cache
 	validatorIndexCache *ristretto.Cache
+	stateSlotBitLock    sync.Mutex
+	blockSlotBitLock    sync.Mutex
+	stateSummaryCache   *cache.StateSummaryCache
 }
 
 // NewKVStore initializes a new boltDB key-value store at the directory
 // path specified, creates the kv-buckets based on the schema, and stores
 // an open connection db object as a property of the Store struct.
-func NewKVStore(dirPath string) (*Store, error) {
+func NewKVStore(dirPath string, stateSummaryCache *cache.StateSummaryCache) (*Store, error) {
 	if err := os.MkdirAll(dirPath, 0700); err != nil {
 		return nil, err
 	}
 	datafile := path.Join(dirPath, databaseFileName)
-	boltDB, err := bolt.Open(datafile, 0600, &bolt.Options{Timeout: 1 * time.Second, InitialMmapSize: 10e6})
+	boltDB, err := bolt.Open(datafile, params.BeaconIoConfig().ReadWritePermissions, &bolt.Options{Timeout: 1 * time.Second, InitialMmapSize: 10e6})
 	if err != nil {
 		if err == bolt.ErrTimeout {
 			return nil, errors.New("cannot obtain database lock, database may be in use by another process")
@@ -76,6 +84,7 @@ func NewKVStore(dirPath string) (*Store, error) {
 		databasePath:        dirPath,
 		blockCache:          blockCache,
 		validatorIndexCache: validatorCache,
+		stateSummaryCache:   stateSummaryCache,
 	}
 
 	if err := kv.db.Update(func(tx *bolt.Tx) error {
@@ -84,7 +93,6 @@ func NewKVStore(dirPath string) (*Store, error) {
 			attestationsBucket,
 			blocksBucket,
 			stateBucket,
-			validatorsBucket,
 			proposerSlashingsBucket,
 			attesterSlashingsBucket,
 			voluntaryExitsBucket,
@@ -95,6 +103,9 @@ func NewKVStore(dirPath string) (*Store, error) {
 			archivedBalancesBucket,
 			archivedValidatorParticipationBucket,
 			powchainBucket,
+			stateSummaryBucket,
+			archivedIndexRootBucket,
+			slotsHasObjectBucket,
 			// Indices buckets.
 			attestationHeadBlockRootBucket,
 			attestationSourceRootIndicesBucket,
@@ -104,8 +115,8 @@ func NewKVStore(dirPath string) (*Store, error) {
 			blockSlotIndicesBucket,
 			blockParentRootIndicesBucket,
 			finalizedBlockRootsIndexBucket,
-			// Migration bucket.
-			migrationBucket,
+			// New State Management service bucket.
+			newStateServiceCompatibleBucket,
 		)
 	}); err != nil {
 		return nil, err
@@ -117,23 +128,26 @@ func NewKVStore(dirPath string) (*Store, error) {
 }
 
 // ClearDB removes the previously stored database in the data directory.
-func (k *Store) ClearDB() error {
-	if _, err := os.Stat(k.databasePath); os.IsNotExist(err) {
+func (kv *Store) ClearDB() error {
+	if _, err := os.Stat(kv.databasePath); os.IsNotExist(err) {
 		return nil
 	}
-	prometheus.Unregister(createBoltCollector(k.db))
-	return os.Remove(path.Join(k.databasePath, databaseFileName))
+	prometheus.Unregister(createBoltCollector(kv.db))
+	if err := os.Remove(path.Join(kv.databasePath, databaseFileName)); err != nil {
+		return errors.Wrap(err, "could not remove database file")
+	}
+	return nil
 }
 
 // Close closes the underlying BoltDB database.
-func (k *Store) Close() error {
-	prometheus.Unregister(createBoltCollector(k.db))
-	return k.db.Close()
+func (kv *Store) Close() error {
+	prometheus.Unregister(createBoltCollector(kv.db))
+	return kv.db.Close()
 }
 
 // DatabasePath at which this database writes files.
-func (k *Store) DatabasePath() string {
-	return k.databasePath
+func (kv *Store) DatabasePath() string {
+	return kv.databasePath
 }
 
 func createBuckets(tx *bolt.Tx, buckets ...[]byte) error {

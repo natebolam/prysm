@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
@@ -15,8 +14,12 @@ import (
 	"gopkg.in/d4l3k/messagediff.v1"
 )
 
+func init() {
+	state.SkipSlotCache.Disable()
+}
+
 func runSlotProcessingTests(t *testing.T, config string) {
-	if err := spectest.SetConfig(config); err != nil {
+	if err := spectest.SetConfig(t, config); err != nil {
 		t.Fatal(err)
 	}
 
@@ -29,7 +32,7 @@ func runSlotProcessingTests(t *testing.T, config string) {
 				t.Fatal(err)
 			}
 			base := &pb.BeaconState{}
-			if err := ssz.Unmarshal(preBeaconStateFile, base); err != nil {
+			if err := base.UnmarshalSSZ(preBeaconStateFile); err != nil {
 				t.Fatalf("Failed to unmarshal: %v", err)
 			}
 			beaconState, err := beaconstate.InitializeFromProto(base)
@@ -52,7 +55,7 @@ func runSlotProcessingTests(t *testing.T, config string) {
 				t.Fatal(err)
 			}
 			postBeaconState := &pb.BeaconState{}
-			if err := ssz.Unmarshal(postBeaconStateFile, postBeaconState); err != nil {
+			if err := postBeaconState.UnmarshalSSZ(postBeaconStateFile); err != nil {
 				t.Fatalf("Failed to unmarshal: %v", err)
 			}
 			postState, err := state.ProcessSlots(context.Background(), beaconState, beaconState.Slot()+uint64(slotsCount))

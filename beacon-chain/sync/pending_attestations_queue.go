@@ -3,27 +3,32 @@ package sync
 import (
 	"context"
 	"encoding/hex"
+	"io"
 	"sync"
-	"time"
 
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/rand"
 	"github.com/prysmaticlabs/prysm/shared/runutil"
+	"github.com/prysmaticlabs/prysm/shared/slotutil"
 	"github.com/prysmaticlabs/prysm/shared/traceutil"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
-	"golang.org/x/exp/rand"
 )
 
 // This defines how often a node cleans up and processes pending attestations in the queue.
-var processPendingAttsPeriod = time.Duration(params.BeaconConfig().SecondsPerSlot/2) * time.Second
+var processPendingAttsPeriod = slotutil.DivideSlotBy(2 /* twice per slot */)
 
 // This processes pending attestation queues on every `processPendingAttsPeriod`.
 func (s *Service) processPendingAttsQueue() {
 	ctx := context.Background()
+	// Prevents multiple queue processing goroutines (invoked by RunEvery) from contending for data.
 	mutex := new(sync.Mutex)
 	runutil.RunEvery(s.ctx, processPendingAttsPeriod, func() {
 		mutex.Lock()
@@ -56,27 +61,31 @@ func (s *Service) processPendingAtts(ctx context.Context) error {
 	}
 	s.pendingAttsLock.RUnlock()
 
+	randGen := rand.NewGenerator()
 	for _, bRoot := range roots {
 		s.pendingAttsLock.RLock()
 		attestations := s.blkRootToPendingAtts[bRoot]
 		s.pendingAttsLock.RUnlock()
 		// Has the pending attestation's missing block arrived and the node processed block yet?
-		if s.db.HasBlock(ctx, bRoot) && s.db.HasState(ctx, bRoot) {
+		hasStateSummary := featureconfig.Get().NewStateMgmt && s.db.HasStateSummary(ctx, bRoot) || s.stateSummaryCache.Has(bRoot)
+		if s.db.HasBlock(ctx, bRoot) && (s.db.HasState(ctx, bRoot) || hasStateSummary) {
 			numberOfBlocksRecoveredFromAtt.Inc()
-			for _, att := range attestations {
+			for _, signedAtt := range attestations {
+				att := signedAtt.Message
 				// The pending attestations can arrive in both aggregated and unaggregated forms,
 				// each from has distinct validation steps.
 				if helpers.IsAggregated(att.Aggregate) {
 					// Save the pending aggregated attestation to the pool if it passes the aggregated
 					// validation steps.
-					if s.validateBlockInAttestation(ctx, att) && s.validateAggregatedAtt(ctx, att) {
+					aggValid := s.validateAggregatedAtt(ctx, signedAtt) == pubsub.ValidationAccept
+					if s.validateBlockInAttestation(ctx, signedAtt) && aggValid {
 						if err := s.attPool.SaveAggregatedAttestation(att.Aggregate); err != nil {
 							return err
 						}
 						numberOfAttsRecovered.Inc()
 
-						// Broadcasting the attestation again once a node is able to process it.
-						if err := s.p2p.Broadcast(ctx, att); err != nil {
+						// Broadcasting the signed attestation again once a node is able to process it.
+						if err := s.p2p.Broadcast(ctx, signedAtt); err != nil {
 							log.WithError(err).Error("Failed to broadcast")
 						}
 					}
@@ -91,8 +100,8 @@ func (s *Service) processPendingAtts(ctx context.Context) error {
 					}
 					numberOfAttsRecovered.Inc()
 
-					// Broadcasting the attestation again once a node is able to process it.
-					if err := s.p2p.Broadcast(ctx, att); err != nil {
+					// Broadcasting the signed attestation again once a node is able to process it.
+					if err := s.p2p.Broadcast(ctx, signedAtt); err != nil {
 						log.WithError(err).Error("Failed to broadcast")
 					}
 				}
@@ -110,29 +119,38 @@ func (s *Service) processPendingAtts(ctx context.Context) error {
 			// Pending attestation's missing block has not arrived yet.
 			log.WithFields(logrus.Fields{
 				"currentSlot": s.chain.CurrentSlot(),
-				"attSlot":     attestations[0].Aggregate.Data.Slot,
+				"attSlot":     attestations[0].Message.Aggregate.Data.Slot,
 				"attCount":    len(attestations),
 				"blockRoot":   hex.EncodeToString(bytesutil.Trunc(bRoot[:])),
 			}).Debug("Requesting block for pending attestation")
 
 			// Start with a random peer to query, but choose the first peer in our unsorted list that claims to
 			// have a head slot newer or equal to the pending attestation's target boundary slot.
+			// If there are no peer id's available, then we should exit from this function. The function will
+			// be run again periodically, and there may be peers available in future runs.
 			if len(pids) == 0 {
+				log.Debug("No peer IDs available to request missing block from for pending attestation")
 				return nil
 			}
-			pid := pids[rand.Int()%len(pids)]
-			targetSlot := helpers.SlotToEpoch(attestations[0].Aggregate.Data.Target.Epoch)
+			pid := pids[randGen.Int()%len(pids)]
+			targetSlot := helpers.SlotToEpoch(attestations[0].Message.Aggregate.Data.Target.Epoch)
 			for _, p := range pids {
-				if cs, _ := s.p2p.Peers().ChainState(p); cs != nil && cs.HeadSlot >= targetSlot {
+				cs, err := s.p2p.Peers().ChainState(p)
+				if err != nil {
+					return errors.Wrap(err, "could not get chain state for peer")
+				}
+				if cs != nil && cs.HeadSlot >= targetSlot {
 					pid = p
 					break
 				}
 			}
 
 			req := [][32]byte{bRoot}
-			if err := s.sendRecentBeaconBlocksRequest(ctx, req, pid); err != nil {
-				traceutil.AnnotateError(span, err)
-				log.Errorf("Could not send recent block request: %v", err)
+			if err := s.sendRecentBeaconBlocksRequest(ctx, req, pid); err != nil && err == io.EOF {
+				if err = s.sendRecentBeaconBlocksRequestFallback(ctx, req, pid); err != nil {
+					traceutil.AnnotateError(span, err)
+					log.Errorf("Could not send recent block request: %v", err)
+				}
 			}
 		}
 	}
@@ -142,14 +160,14 @@ func (s *Service) processPendingAtts(ctx context.Context) error {
 // This defines how pending attestations is saved in the map. The key is the
 // root of the missing block. The value is the list of pending attestations
 // that voted for that block root.
-func (s *Service) savePendingAtt(att *ethpb.AggregateAttestationAndProof) {
-	root := bytesutil.ToBytes32(att.Aggregate.Data.BeaconBlockRoot)
+func (s *Service) savePendingAtt(att *ethpb.SignedAggregateAttestationAndProof) {
+	root := bytesutil.ToBytes32(att.Message.Aggregate.Data.BeaconBlockRoot)
 
 	s.pendingAttsLock.Lock()
 	defer s.pendingAttsLock.Unlock()
 	_, ok := s.blkRootToPendingAtts[root]
 	if !ok {
-		s.blkRootToPendingAtts[root] = []*ethpb.AggregateAttestationAndProof{att}
+		s.blkRootToPendingAtts[root] = []*ethpb.SignedAggregateAttestationAndProof{att}
 		return
 	}
 
@@ -169,7 +187,7 @@ func (s *Service) validatePendingAtts(ctx context.Context, slot uint64) {
 
 	for bRoot, atts := range s.blkRootToPendingAtts {
 		for i := len(atts) - 1; i >= 0; i-- {
-			if slot >= atts[i].Aggregate.Data.Slot+params.BeaconConfig().SlotsPerEpoch {
+			if slot >= atts[i].Message.Aggregate.Data.Slot+params.BeaconConfig().SlotsPerEpoch {
 				// Remove the pending attestation from the list in place.
 				atts = append(atts[:i], atts[i+1:]...)
 				numberOfAttsNotRecovered.Inc()
