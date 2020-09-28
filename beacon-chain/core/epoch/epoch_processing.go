@@ -10,7 +10,6 @@ import (
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/validators"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
@@ -46,7 +45,7 @@ func (s sortableIndices) Less(i, j int) bool {
 //  def get_attesting_balance(state: BeaconState, attestations: List[PendingAttestation]) -> Gwei:
 //    return get_total_balance(state, get_unslashed_attesting_indices(state, attestations))
 func AttestingBalance(state *stateTrie.BeaconState, atts []*pb.PendingAttestation) (uint64, error) {
-	indices, err := unslashedAttestingIndices(state, atts)
+	indices, err := UnslashedAttestingIndices(state, atts)
 	if err != nil {
 		return 0, errors.Wrap(err, "could not get attesting indices")
 	}
@@ -148,10 +147,11 @@ func ProcessRegistryUpdates(state *stateTrie.BeaconState) (*stateTrie.BeaconStat
 //  def process_slashings(state: BeaconState) -> None:
 //    epoch = get_current_epoch(state)
 //    total_balance = get_total_active_balance(state)
+//    adjusted_total_slashing_balance = min(sum(state.slashings) * PROPORTIONAL_SLASHING_MULTIPLIER, total_balance)
 //    for index, validator in enumerate(state.validators):
 //        if validator.slashed and epoch + EPOCHS_PER_SLASHINGS_VECTOR // 2 == validator.withdrawable_epoch:
 //            increment = EFFECTIVE_BALANCE_INCREMENT  # Factored out from penalty numerator to avoid uint64 overflow
-//			  penalty_numerator = validator.effective_balance // increment * min(sum(state.slashings) * 3, total_balance)
+//			  penalty_numerator = validator.effective_balance // increment * adjusted_total_slashing_balance
 //            penalty = penalty_numerator // total_balance * increment
 //            decrease_balance(state, ValidatorIndex(index), penalty)
 func ProcessSlashings(state *stateTrie.BeaconState) (*stateTrie.BeaconState, error) {
@@ -174,10 +174,10 @@ func ProcessSlashings(state *stateTrie.BeaconState) (*stateTrie.BeaconState, err
 	// a callback is used here to apply the following actions  to all validators
 	// below equally.
 	increment := params.BeaconConfig().EffectiveBalanceIncrement
+	minSlashing := mathutil.Min(totalSlashing*params.BeaconConfig().ProportionalSlashingMultiplier, totalBalance)
 	err = state.ApplyToEveryValidator(func(idx int, val *ethpb.Validator) (bool, error) {
 		correctEpoch := (currentEpoch + exitLength/2) == val.WithdrawableEpoch
 		if val.Slashed && correctEpoch {
-			minSlashing := mathutil.Min(totalSlashing*3, totalBalance)
 			penaltyNumerator := val.EffectiveBalance / increment * minSlashing
 			penalty := penaltyNumerator / totalBalance * increment
 			if err := helpers.DecreaseBalance(state, uint64(idx), penalty); err != nil {
@@ -311,7 +311,7 @@ func ProcessFinalUpdates(state *stateTrie.BeaconState) (*stateTrie.BeaconState, 
 			BlockRoots: state.BlockRoots(),
 			StateRoots: state.StateRoots(),
 		}
-		batchRoot, err := ssz.HashTreeRoot(historicalBatch)
+		batchRoot, err := historicalBatch.HashTreeRoot()
 		if err != nil {
 			return nil, errors.Wrap(err, "could not hash historical batch")
 		}
@@ -330,7 +330,7 @@ func ProcessFinalUpdates(state *stateTrie.BeaconState) (*stateTrie.BeaconState, 
 	return state, nil
 }
 
-// unslashedAttestingIndices returns all the attesting indices from a list of attestations,
+// UnslashedAttestingIndices returns all the attesting indices from a list of attestations,
 // it sorts the indices and filters out the slashed ones.
 //
 // Spec pseudocode definition:
@@ -340,7 +340,7 @@ func ProcessFinalUpdates(state *stateTrie.BeaconState) (*stateTrie.BeaconState, 
 //    for a in attestations:
 //        output = output.union(get_attesting_indices(state, a.data, a.aggregation_bits))
 //    return set(filter(lambda index: not state.validators[index].slashed, output))
-func unslashedAttestingIndices(state *stateTrie.BeaconState, atts []*pb.PendingAttestation) ([]uint64, error) {
+func UnslashedAttestingIndices(state *stateTrie.BeaconState, atts []*pb.PendingAttestation) ([]uint64, error) {
 	var setIndices []uint64
 	seen := make(map[uint64]bool)
 
@@ -351,14 +351,12 @@ func unslashedAttestingIndices(state *stateTrie.BeaconState, atts []*pb.PendingA
 		}
 		attestingIndices := attestationutil.AttestingIndices(att.AggregationBits, committee)
 		// Create a set for attesting indices
-		set := make([]uint64, 0, len(attestingIndices))
 		for _, index := range attestingIndices {
 			if !seen[index] {
-				set = append(set, index)
+				setIndices = append(setIndices, index)
 			}
 			seen[index] = true
 		}
-		setIndices = append(setIndices, set...)
 	}
 	// Sort the attesting set indices by increasing order.
 	sort.Slice(setIndices, func(i, j int) bool { return setIndices[i] < setIndices[j] })

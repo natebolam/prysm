@@ -18,6 +18,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/prometheus"
 	"github.com/prysmaticlabs/prysm/shared/tracing"
 	"github.com/prysmaticlabs/prysm/shared/version"
@@ -63,11 +64,18 @@ func NewSlasherNode(cliCtx *cli.Context) (*SlasherNode, error) {
 		return nil, err
 	}
 
-	cmd.ConfigureSlasher(cliCtx)
+	if cliCtx.Bool(flags.EnableHistoricalDetectionFlag.Name) {
+		// Set the max RPC size to 4096 as configured by --historical-slasher-node for optimal historical detection.
+		cmdConfig := cmd.Get()
+		cmdConfig.MaxRPCPageSize = int(params.BeaconConfig().SlotsPerEpoch * params.BeaconConfig().MaxAttestations)
+		cmd.Init(cmdConfig)
+	}
+
 	featureconfig.ConfigureSlasher(cliCtx)
+	cmd.ConfigureSlasher(cliCtx)
 	registry := shared.NewServiceRegistry()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(cliCtx.Context)
 	slasher := &SlasherNode{
 		cliCtx:                cliCtx,
 		ctx:                   ctx,
@@ -147,8 +155,8 @@ func (s *SlasherNode) Close() {
 }
 
 func (s *SlasherNode) registerPrometheusService() error {
-	service := prometheus.NewPrometheusService(
-		fmt.Sprintf("%s:%d", s.cliCtx.String(cmd.MonitoringHostFlag.Name), s.cliCtx.Int64(flags.MonitoringPortFlag.Name)),
+	service := prometheus.NewService(
+		fmt.Sprintf("%s:%d", s.cliCtx.String(cmd.MonitoringHostFlag.Name), s.cliCtx.Int(flags.MonitoringPortFlag.Name)),
 		s.services,
 	)
 	logrus.AddHook(prometheus.NewLogrusCollector())
@@ -160,7 +168,9 @@ func (s *SlasherNode) startDB() error {
 	clearDB := s.cliCtx.Bool(cmd.ClearDB.Name)
 	forceClearDB := s.cliCtx.Bool(cmd.ForceClearDB.Name)
 	dbPath := path.Join(baseDir, slasherDBName)
-	cfg := &kv.Config{}
+	spanCacheSize := s.cliCtx.Int(flags.SpanCacheSize.Name)
+	cfg := &kv.Config{SpanCacheSize: spanCacheSize}
+	log.Infof("Span cache size has been set to: %d", spanCacheSize)
 	d, err := db.NewDB(dbPath, cfg)
 	if err != nil {
 		return err
@@ -197,7 +207,7 @@ func (s *SlasherNode) registerBeaconClientService() error {
 		beaconProvider = flags.BeaconRPCProviderFlag.Value
 	}
 
-	bs, err := beaconclient.NewBeaconClientService(s.ctx, &beaconclient.Config{
+	bs, err := beaconclient.NewService(s.ctx, &beaconclient.Config{
 		BeaconCert:            beaconCert,
 		SlasherDB:             s.db,
 		BeaconProvider:        beaconProvider,
@@ -215,13 +225,14 @@ func (s *SlasherNode) registerDetectionService() error {
 	if err := s.services.FetchService(&bs); err != nil {
 		panic(err)
 	}
-	ds := detection.NewDetectionService(s.ctx, &detection.Config{
+	ds := detection.NewService(s.ctx, &detection.Config{
 		Notifier:              bs,
 		SlasherDB:             s.db,
 		BeaconClient:          bs,
 		ChainFetcher:          bs,
 		AttesterSlashingsFeed: s.attesterSlashingsFeed,
 		ProposerSlashingsFeed: s.proposerSlashingsFeed,
+		HistoricalDetection:   s.cliCtx.Bool(flags.EnableHistoricalDetectionFlag.Name),
 	})
 	return s.services.RegisterService(ds)
 }

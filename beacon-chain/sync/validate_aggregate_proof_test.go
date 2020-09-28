@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +19,6 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/attestations"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	p2ptest "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	mockSync "github.com/prysmaticlabs/prysm/beacon-chain/sync/initial-sync/testing"
 	"github.com/prysmaticlabs/prysm/shared/attestationutil"
 	"github.com/prysmaticlabs/prysm/shared/bls"
@@ -28,6 +26,8 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestVerifyIndexInCommittee_CanVerify(t *testing.T) {
@@ -37,9 +37,7 @@ func TestVerifyIndexInCommittee_CanVerify(t *testing.T) {
 
 	validators := uint64(64)
 	s, _ := testutil.DeterministicGenesisState(t, validators)
-	if err := s.SetSlot(params.BeaconConfig().SlotsPerEpoch); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.SetSlot(params.BeaconConfig().SlotsPerEpoch))
 
 	bf := []byte{0xff}
 	att := &ethpb.Attestation{Data: &ethpb.AttestationData{
@@ -47,22 +45,13 @@ func TestVerifyIndexInCommittee_CanVerify(t *testing.T) {
 		AggregationBits: bf}
 
 	committee, err := helpers.BeaconCommitteeFromState(s, att.Data.Slot, att.Data.CommitteeIndex)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	indices := attestationutil.AttestingIndices(att.AggregationBits, committee)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := validateIndexInCommittee(ctx, s, att, indices[0]); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, validateIndexInCommittee(ctx, s, att, indices[0]))
 
 	wanted := "validator index 1000 is not within the committee"
-	if err := validateIndexInCommittee(ctx, s, att, 1000); err == nil || !strings.Contains(err.Error(), wanted) {
-		t.Error("Did not receive wanted error")
-	}
+	assert.ErrorContains(t, wanted, validateIndexInCommittee(ctx, s, att, 1000))
 }
 
 func TestVerifyIndexInCommittee_ExistsInBeaconCommittee(t *testing.T) {
@@ -72,9 +61,7 @@ func TestVerifyIndexInCommittee_ExistsInBeaconCommittee(t *testing.T) {
 
 	validators := uint64(64)
 	s, _ := testutil.DeterministicGenesisState(t, validators)
-	if err := s.SetSlot(params.BeaconConfig().SlotsPerEpoch); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.SetSlot(params.BeaconConfig().SlotsPerEpoch))
 
 	bf := []byte{0xff}
 	att := &ethpb.Attestation{Data: &ethpb.AttestationData{
@@ -82,18 +69,12 @@ func TestVerifyIndexInCommittee_ExistsInBeaconCommittee(t *testing.T) {
 		AggregationBits: bf}
 
 	committee, err := helpers.BeaconCommitteeFromState(s, att.Data.Slot, att.Data.CommitteeIndex)
-	if err != nil {
-		t.Error(err)
-	}
+	require.NoError(t, err)
 
-	if err := validateIndexInCommittee(ctx, s, att, committee[0]); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, validateIndexInCommittee(ctx, s, att, committee[0]))
 
 	wanted := "validator index 1000 is not within the committee"
-	if err := validateIndexInCommittee(ctx, s, att, 1000); err == nil || !strings.Contains(err.Error(), wanted) {
-		t.Error("Did not receive wanted error")
-	}
+	assert.ErrorContains(t, wanted, validateIndexInCommittee(ctx, s, att, 1000))
 }
 
 func TestVerifySelection_NotAnAggregator(t *testing.T) {
@@ -104,12 +85,14 @@ func TestVerifySelection_NotAnAggregator(t *testing.T) {
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
 
 	sig := privKeys[0].Sign([]byte{'A'})
-	data := &ethpb.AttestationData{}
+	data := &ethpb.AttestationData{
+		BeaconBlockRoot: make([]byte, 32),
+		Target:          &ethpb.Checkpoint{Root: make([]byte, 32)},
+		Source:          &ethpb.Checkpoint{Root: make([]byte, 32)},
+	}
 
 	wanted := "validator is not an aggregator for slot"
-	if err := validateSelection(ctx, beaconState, data, 0, sig.Marshal()); err == nil || !strings.Contains(err.Error(), wanted) {
-		t.Error("Did not receive wanted error")
-	}
+	assert.ErrorContains(t, wanted, validateSelection(ctx, beaconState, data, 0, sig.Marshal()))
 }
 
 func TestVerifySelection_BadSignature(t *testing.T) {
@@ -118,12 +101,14 @@ func TestVerifySelection_BadSignature(t *testing.T) {
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
 
 	sig := privKeys[0].Sign([]byte{'A'})
-	data := &ethpb.AttestationData{}
-
-	wanted := "could not validate slot signature"
-	if err := validateSelection(ctx, beaconState, data, 0, sig.Marshal()); err == nil || !strings.Contains(err.Error(), wanted) {
-		t.Error("Did not receive wanted error")
+	data := &ethpb.AttestationData{
+		BeaconBlockRoot: make([]byte, 32),
+		Target:          &ethpb.Checkpoint{Root: make([]byte, 32)},
+		Source:          &ethpb.Checkpoint{Root: make([]byte, 32)},
 	}
+
+	wanted := "signature did not verify"
+	assert.ErrorContains(t, wanted, validateSelection(ctx, beaconState, data, 0, sig.Marshal()))
 }
 
 func TestVerifySelection_CanVerify(t *testing.T) {
@@ -131,20 +116,14 @@ func TestVerifySelection_CanVerify(t *testing.T) {
 	validators := uint64(256)
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
 
-	data := &ethpb.AttestationData{}
-	domain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainSelectionProof, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
+	data := &ethpb.AttestationData{
+		BeaconBlockRoot: make([]byte, 32),
+		Target:          &ethpb.Checkpoint{Root: make([]byte, 32)},
+		Source:          &ethpb.Checkpoint{Root: make([]byte, 32)},
 	}
-	slotRoot, err := helpers.ComputeSigningRoot(data.Slot, domain)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sig := privKeys[0].Sign(slotRoot[:])
-
-	if err := validateSelection(ctx, beaconState, data, 0, sig.Marshal()); err != nil {
-		t.Fatal(err)
-	}
+	sig, err := helpers.ComputeDomainAndSign(beaconState, 0, data.Slot, params.BeaconConfig().DomainSelectionProof, privKeys[0])
+	require.NoError(t, err)
+	require.NoError(t, validateSelection(ctx, beaconState, data, 0, sig))
 }
 
 func TestValidateAggregateAndProof_NoBlock(t *testing.T) {
@@ -153,9 +132,11 @@ func TestValidateAggregateAndProof_NoBlock(t *testing.T) {
 
 	att := &ethpb.Attestation{
 		Data: &ethpb.AttestationData{
-			Source: &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
-			Target: &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+			Source:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+			BeaconBlockRoot: make([]byte, 32),
 		},
+		Signature: make([]byte, 96),
 	}
 
 	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
@@ -163,12 +144,10 @@ func TestValidateAggregateAndProof_NoBlock(t *testing.T) {
 		Aggregate:       att,
 		AggregatorIndex: 0,
 	}
-	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof, Signature: make([]byte, 96)}
 
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:                  p,
 		db:                   db,
@@ -177,12 +156,14 @@ func TestValidateAggregateAndProof_NoBlock(t *testing.T) {
 		blkRootToPendingAtts: make(map[[32]byte][]*ethpb.SignedAggregateAttestationAndProof),
 		seenAttestationCache: c,
 		stateSummaryCache:    cache.NewStateSummaryCache(),
+		chain:                &mock.ChainService{},
 	}
+	err = r.initCaches()
+	require.NoError(t, err)
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -205,18 +186,12 @@ func TestValidateAggregateAndProof_NotWithinSlotRange(t *testing.T) {
 	validators := uint64(256)
 	beaconState, _ := testutil.DeterministicGenesisState(t, validators)
 
-	b := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{}}
-	if err := db.SaveBlock(context.Background(), b); err != nil {
-		t.Fatal(err)
-	}
-	root, err := stateutil.BlockRoot(b.Block)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := testutil.NewBeaconBlock()
+	require.NoError(t, db.SaveBlock(context.Background(), b))
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
 	s := testutil.NewBeaconState()
-	if err := db.SaveState(context.Background(), s, root); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveState(context.Background(), s, root))
 
 	aggBits := bitfield.NewBitlist(3)
 	aggBits.SetBitAt(0, true)
@@ -228,36 +203,37 @@ func TestValidateAggregateAndProof_NotWithinSlotRange(t *testing.T) {
 			Target:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
 		},
 		AggregationBits: aggBits,
+		Signature:       make([]byte, 96),
 	}
 
 	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
-		Aggregate: att,
+		Aggregate:      att,
+		SelectionProof: make([]byte, 96),
 	}
-	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof, Signature: make([]byte, 96)}
 
-	if err := beaconState.SetGenesisTime(uint64(time.Now().Unix())); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.SetGenesisTime(uint64(time.Now().Unix())))
 
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:         p,
 		db:          db,
 		initialSync: &mockSync.Sync{IsSyncing: false},
-		chain: &mock.ChainService{Genesis: time.Now(),
-			State: beaconState},
+		chain: &mock.ChainService{
+			Genesis: time.Now(),
+			State:   beaconState,
+		},
 		attPool:              attestations.NewPool(),
 		seenAttestationCache: c,
 		stateSummaryCache:    cache.NewStateSummaryCache(),
 	}
+	err = r.initCaches()
+	require.NoError(t, err)
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -275,9 +251,8 @@ func TestValidateAggregateAndProof_NotWithinSlotRange(t *testing.T) {
 	att.Data.Slot = 1<<32 - 1
 
 	buf = new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 
 	msg = &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -299,14 +274,10 @@ func TestValidateAggregateAndProof_ExistedInPool(t *testing.T) {
 	validators := uint64(256)
 	beaconState, _ := testutil.DeterministicGenesisState(t, validators)
 
-	b := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{}}
-	if err := db.SaveBlock(context.Background(), b); err != nil {
-		t.Fatal(err)
-	}
-	root, err := stateutil.BlockRoot(b.Block)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := testutil.NewBeaconBlock()
+	require.NoError(t, db.SaveBlock(context.Background(), b))
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
 
 	aggBits := bitfield.NewBitlist(3)
 	aggBits.SetBitAt(0, true)
@@ -318,20 +289,18 @@ func TestValidateAggregateAndProof_ExistedInPool(t *testing.T) {
 			Target:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
 		},
 		AggregationBits: aggBits,
+		Signature:       make([]byte, 96),
 	}
 
 	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
-		Aggregate: att,
+		Aggregate:      att,
+		SelectionProof: make([]byte, 96),
 	}
-	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof, Signature: make([]byte, 96)}
 
-	if err := beaconState.SetGenesisTime(uint64(time.Now().Unix())); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.SetGenesisTime(uint64(time.Now().Unix())))
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		attPool:     attestations.NewPool(),
 		p2p:         p,
@@ -342,11 +311,12 @@ func TestValidateAggregateAndProof_ExistedInPool(t *testing.T) {
 		seenAttestationCache: c,
 		blkRootToPendingAtts: make(map[[32]byte][]*ethpb.SignedAggregateAttestationAndProof),
 	}
+	err = r.initCaches()
+	require.NoError(t, err)
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -357,17 +327,13 @@ func TestValidateAggregateAndProof_ExistedInPool(t *testing.T) {
 		},
 	}
 
-	if err := r.attPool.SaveBlockAttestation(att); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, r.attPool.SaveBlockAttestation(att))
 	if r.validateAggregateAndProof(context.Background(), "", msg) == pubsub.ValidationAccept {
 		t.Error("Expected validate to fail")
 	}
 }
 
-func TestValidateAggregateAndProofWithNewStateMgmt_CanValidate(t *testing.T) {
-	resetCfg := featureconfig.InitWithReset(&featureconfig.Flags{NewStateMgmt: true})
-	defer resetCfg()
+func TestValidateAggregateAndProof_CanValidate(t *testing.T) {
 
 	db, _ := dbtest.SetupDB(t)
 	p := p2ptest.NewTestP2P(t)
@@ -375,18 +341,12 @@ func TestValidateAggregateAndProofWithNewStateMgmt_CanValidate(t *testing.T) {
 	validators := uint64(256)
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
 
-	b := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{}}
-	if err := db.SaveBlock(context.Background(), b); err != nil {
-		t.Fatal(err)
-	}
-	root, err := stateutil.BlockRoot(b.Block)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := testutil.NewBeaconBlock()
+	require.NoError(t, db.SaveBlock(context.Background(), b))
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
 	s := testutil.NewBeaconState()
-	if err := db.SaveState(context.Background(), s, root); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveState(context.Background(), s, root))
 
 	aggBits := bitfield.NewBitlist(3)
 	aggBits.SetBitAt(0, true)
@@ -400,63 +360,34 @@ func TestValidateAggregateAndProofWithNewStateMgmt_CanValidate(t *testing.T) {
 	}
 
 	committee, err := helpers.BeaconCommitteeFromState(beaconState, att.Data.Slot, att.Data.CommitteeIndex)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	attestingIndices := attestationutil.AttestingIndices(att.AggregationBits, committee)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	attesterDomain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainBeaconAttester, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 	hashTreeRoot, err := helpers.ComputeSigningRoot(att.Data, attesterDomain)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	sigs := make([]bls.Signature, len(attestingIndices))
 	for i, indice := range attestingIndices {
 		sig := privKeys[indice].Sign(hashTreeRoot[:])
 		sigs[i] = sig
 	}
-	att.Signature = bls.AggregateSignatures(sigs).Marshal()[:]
-
-	selectionDomain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainSelectionProof, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	slotRoot, err := helpers.ComputeSigningRoot(att.Data.Slot, selectionDomain)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sig := privKeys[22].Sign(slotRoot[:])
+	att.Signature = bls.AggregateSignatures(sigs).Marshal()
+	ai := committee[0]
+	sig, err := helpers.ComputeDomainAndSign(beaconState, 0, att.Data.Slot, params.BeaconConfig().DomainSelectionProof, privKeys[ai])
+	require.NoError(t, err)
 	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
-		SelectionProof:  sig.Marshal(),
+		SelectionProof:  sig,
 		Aggregate:       att,
-		AggregatorIndex: 22,
+		AggregatorIndex: ai,
 	}
 	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof.Signature, err = helpers.ComputeDomainAndSign(beaconState, 0, signedAggregateAndProof.Message, params.BeaconConfig().DomainAggregateAndProof, privKeys[ai])
+	require.NoError(t, err)
 
-	attesterDomain, err = helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainAggregateAndProof, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	signingRoot, err := helpers.ComputeSigningRoot(signedAggregateAndProof.Message, attesterDomain)
-	if err != nil {
-		t.Error(err)
-	}
-	aggreSig := privKeys[22].Sign(signingRoot[:]).Marshal()
-	signedAggregateAndProof.Signature = aggreSig[:]
-
-	if err := beaconState.SetGenesisTime(uint64(time.Now().Unix())); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.SetGenesisTime(uint64(time.Now().Unix())))
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:         p,
 		db:          db,
@@ -471,11 +402,12 @@ func TestValidateAggregateAndProofWithNewStateMgmt_CanValidate(t *testing.T) {
 		seenAttestationCache: c,
 		stateSummaryCache:    cache.NewStateSummaryCache(),
 	}
+	err = r.initCaches()
+	require.NoError(t, err)
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -486,34 +418,26 @@ func TestValidateAggregateAndProofWithNewStateMgmt_CanValidate(t *testing.T) {
 		},
 	}
 
-	if r.validateAggregateAndProof(context.Background(), "", msg) != pubsub.ValidationAccept {
-		t.Fatal("Validated status is false")
-	}
-
-	if msg.ValidatorData == nil {
-		t.Error("Did not set validator data")
-	}
+	assert.Equal(t, pubsub.ValidationAccept, r.validateAggregateAndProof(context.Background(), "", msg), "Validated status is false")
+	assert.NotNil(t, msg.ValidatorData, "Did not set validator data")
 }
 
-func TestVerifyIndexInCommittee_SeenAggregatorEpoch(t *testing.T) {
+func TestValidateAggregateAndProofUseCheckptCache_CanValidate(t *testing.T) {
+	resetCfg := featureconfig.InitWithReset(&featureconfig.Flags{UseCheckPointInfoCache: true})
+	defer resetCfg()
+
 	db, _ := dbtest.SetupDB(t)
 	p := p2ptest.NewTestP2P(t)
 
 	validators := uint64(256)
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
 
-	b := &ethpb.SignedBeaconBlock{Block: &ethpb.BeaconBlock{}}
-	if err := db.SaveBlock(context.Background(), b); err != nil {
-		t.Fatal(err)
-	}
-	root, err := stateutil.BlockRoot(b.Block)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := testutil.NewBeaconBlock()
+	require.NoError(t, db.SaveBlock(context.Background(), b))
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
 	s := testutil.NewBeaconState()
-	if err := db.SaveState(context.Background(), s, root); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, db.SaveState(context.Background(), s, root))
 
 	aggBits := bitfield.NewBitlist(3)
 	aggBits.SetBitAt(0, true)
@@ -527,61 +451,121 @@ func TestVerifyIndexInCommittee_SeenAggregatorEpoch(t *testing.T) {
 	}
 
 	committee, err := helpers.BeaconCommitteeFromState(beaconState, att.Data.Slot, att.Data.CommitteeIndex)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	attestingIndices := attestationutil.AttestingIndices(att.AggregationBits, committee)
+	assert.NoError(t, err)
 	attesterDomain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainBeaconAttester, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 	hashTreeRoot, err := helpers.ComputeSigningRoot(att.Data, attesterDomain)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	sigs := make([]bls.Signature, len(attestingIndices))
 	for i, indice := range attestingIndices {
 		sig := privKeys[indice].Sign(hashTreeRoot[:])
 		sigs[i] = sig
 	}
-	att.Signature = bls.AggregateSignatures(sigs).Marshal()[:]
-
-	selectionDomain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainSelectionProof, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	slotRoot, err := helpers.ComputeSigningRoot(att.Data.Slot, selectionDomain)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	sig := privKeys[22].Sign(slotRoot[:])
+	att.Signature = bls.AggregateSignatures(sigs).Marshal()
+	ai := committee[0]
+	sig, err := helpers.ComputeDomainAndSign(beaconState, 0, att.Data.Slot, params.BeaconConfig().DomainSelectionProof, privKeys[ai])
+	require.NoError(t, err)
 	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
-		SelectionProof:  sig.Marshal(),
+		SelectionProof:  sig,
 		Aggregate:       att,
-		AggregatorIndex: 22,
+		AggregatorIndex: ai,
 	}
 	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof.Signature, err = helpers.ComputeDomainAndSign(beaconState, 0, signedAggregateAndProof.Message, params.BeaconConfig().DomainAggregateAndProof, privKeys[ai])
+	require.NoError(t, err)
 
-	attesterDomain, err = helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainAggregateAndProof, beaconState.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, beaconState.SetGenesisTime(uint64(time.Now().Unix())))
+	c, err := lru.New(10)
+	require.NoError(t, err)
+	r := &Service{
+		p2p:         p,
+		db:          db,
+		initialSync: &mockSync.Sync{IsSyncing: false},
+		chain: &mock.ChainService{Genesis: time.Now(),
+			State:            beaconState,
+			ValidAttestation: true,
+			FinalizedCheckPoint: &ethpb.Checkpoint{
+				Epoch: 0,
+			}},
+		attPool:              attestations.NewPool(),
+		seenAttestationCache: c,
+		stateSummaryCache:    cache.NewStateSummaryCache(),
 	}
-	signingRoot, err := helpers.ComputeSigningRoot(signedAggregateAndProof.Message, attesterDomain)
-	if err != nil {
-		t.Error(err)
-	}
-	aggreSig := privKeys[22].Sign(signingRoot[:]).Marshal()
-	signedAggregateAndProof.Signature = aggreSig[:]
+	err = r.initCaches()
+	require.NoError(t, err)
 
-	if err := beaconState.SetGenesisTime(uint64(time.Now().Unix())); err != nil {
-		t.Fatal(err)
+	buf := new(bytes.Buffer)
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
+
+	msg := &pubsub.Message{
+		Message: &pubsubpb.Message{
+			Data: buf.Bytes(),
+			TopicIDs: []string{
+				p2p.GossipTypeMapping[reflect.TypeOf(signedAggregateAndProof)],
+			},
+		},
 	}
+
+	assert.Equal(t, pubsub.ValidationAccept, r.validateAggregateAndProof(context.Background(), "", msg), "Validated status is false")
+	assert.NotNil(t, msg.ValidatorData, "Did not set validator data")
+}
+
+func TestVerifyIndexInCommittee_SeenAggregatorEpoch(t *testing.T) {
+	db, _ := dbtest.SetupDB(t)
+	p := p2ptest.NewTestP2P(t)
+
+	validators := uint64(256)
+	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
+
+	b := testutil.NewBeaconBlock()
+	require.NoError(t, db.SaveBlock(context.Background(), b))
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
+	s := testutil.NewBeaconState()
+	require.NoError(t, db.SaveState(context.Background(), s, root))
+
+	aggBits := bitfield.NewBitlist(3)
+	aggBits.SetBitAt(0, true)
+	att := &ethpb.Attestation{
+		Data: &ethpb.AttestationData{
+			BeaconBlockRoot: root[:],
+			Source:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+		},
+		AggregationBits: aggBits,
+	}
+
+	committee, err := helpers.BeaconCommitteeFromState(beaconState, att.Data.Slot, att.Data.CommitteeIndex)
+	require.NoError(t, err)
+	attestingIndices := attestationutil.AttestingIndices(att.AggregationBits, committee)
+	attesterDomain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainBeaconAttester, beaconState.GenesisValidatorRoot())
+	require.NoError(t, err)
+	hashTreeRoot, err := helpers.ComputeSigningRoot(att.Data, attesterDomain)
+	assert.NoError(t, err)
+	sigs := make([]bls.Signature, len(attestingIndices))
+	for i, indice := range attestingIndices {
+		sig := privKeys[indice].Sign(hashTreeRoot[:])
+		sigs[i] = sig
+	}
+	att.Signature = bls.AggregateSignatures(sigs).Marshal()
+	ai := committee[0]
+	sig, err := helpers.ComputeDomainAndSign(beaconState, 0, att.Data.Slot, params.BeaconConfig().DomainSelectionProof, privKeys[ai])
+	require.NoError(t, err)
+	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
+		SelectionProof:  sig,
+		Aggregate:       att,
+		AggregatorIndex: ai,
+	}
+	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof.Signature, err = helpers.ComputeDomainAndSign(beaconState, 0, signedAggregateAndProof.Message, params.BeaconConfig().DomainAggregateAndProof, privKeys[ai])
+	require.NoError(t, err)
+	require.NoError(t, beaconState.SetGenesisTime(uint64(time.Now().Unix())))
 
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:         p,
 		db:          db,
@@ -598,11 +582,12 @@ func TestVerifyIndexInCommittee_SeenAggregatorEpoch(t *testing.T) {
 		seenAttestationCache: c,
 		stateSummaryCache:    cache.NewStateSummaryCache(),
 	}
+	err = r.initCaches()
+	require.NoError(t, err)
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -613,16 +598,13 @@ func TestVerifyIndexInCommittee_SeenAggregatorEpoch(t *testing.T) {
 		},
 	}
 
-	if r.validateAggregateAndProof(context.Background(), "", msg) != pubsub.ValidationAccept {
-		t.Fatal("Validated status is false")
-	}
+	require.Equal(t, pubsub.ValidationAccept, r.validateAggregateAndProof(context.Background(), "", msg), "Validated status is false")
 
 	// Should fail with another attestation in the same epoch.
 	signedAggregateAndProof.Message.Aggregate.Data.Slot++
 	buf = new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, signedAggregateAndProof); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
 	msg = &pubsub.Message{
 		Message: &pubsubpb.Message{
 			Data: buf.Bytes(),
@@ -636,4 +618,93 @@ func TestVerifyIndexInCommittee_SeenAggregatorEpoch(t *testing.T) {
 	if r.validateAggregateAndProof(context.Background(), "", msg) == pubsub.ValidationAccept {
 		t.Fatal("Validated status is true")
 	}
+}
+
+func TestValidateAggregateAndProof_BadBlock(t *testing.T) {
+
+	db, _ := dbtest.SetupDB(t)
+	p := p2ptest.NewTestP2P(t)
+
+	validators := uint64(256)
+	beaconState, privKeys := testutil.DeterministicGenesisState(t, validators)
+
+	b := testutil.NewBeaconBlock()
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
+	s := testutil.NewBeaconState()
+	require.NoError(t, db.SaveState(context.Background(), s, root))
+
+	aggBits := bitfield.NewBitlist(3)
+	aggBits.SetBitAt(0, true)
+	att := &ethpb.Attestation{
+		Data: &ethpb.AttestationData{
+			BeaconBlockRoot: root[:],
+			Source:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: bytesutil.PadTo([]byte("hello-world"), 32)},
+		},
+		AggregationBits: aggBits,
+	}
+
+	committee, err := helpers.BeaconCommitteeFromState(beaconState, att.Data.Slot, att.Data.CommitteeIndex)
+	assert.NoError(t, err)
+	attestingIndices := attestationutil.AttestingIndices(att.AggregationBits, committee)
+	assert.NoError(t, err)
+	attesterDomain, err := helpers.Domain(beaconState.Fork(), 0, params.BeaconConfig().DomainBeaconAttester, beaconState.GenesisValidatorRoot())
+	assert.NoError(t, err)
+	hashTreeRoot, err := helpers.ComputeSigningRoot(att.Data, attesterDomain)
+	assert.NoError(t, err)
+	sigs := make([]bls.Signature, len(attestingIndices))
+	for i, indice := range attestingIndices {
+		sig := privKeys[indice].Sign(hashTreeRoot[:])
+		sigs[i] = sig
+	}
+	att.Signature = bls.AggregateSignatures(sigs).Marshal()
+	ai := committee[0]
+	sig, err := helpers.ComputeDomainAndSign(beaconState, 0, att.Data.Slot, params.BeaconConfig().DomainSelectionProof, privKeys[ai])
+	require.NoError(t, err)
+
+	aggregateAndProof := &ethpb.AggregateAttestationAndProof{
+		SelectionProof:  sig,
+		Aggregate:       att,
+		AggregatorIndex: ai,
+	}
+	signedAggregateAndProof := &ethpb.SignedAggregateAttestationAndProof{Message: aggregateAndProof}
+	signedAggregateAndProof.Signature, err = helpers.ComputeDomainAndSign(beaconState, 0, signedAggregateAndProof.Message, params.BeaconConfig().DomainAggregateAndProof, privKeys[ai])
+	require.NoError(t, err)
+
+	require.NoError(t, beaconState.SetGenesisTime(uint64(time.Now().Unix())))
+	c, err := lru.New(10)
+	require.NoError(t, err)
+	r := &Service{
+		p2p:         p,
+		db:          db,
+		initialSync: &mockSync.Sync{IsSyncing: false},
+		chain: &mock.ChainService{Genesis: time.Now(),
+			State:            beaconState,
+			ValidAttestation: true,
+			FinalizedCheckPoint: &ethpb.Checkpoint{
+				Epoch: 0,
+			}},
+		attPool:              attestations.NewPool(),
+		seenAttestationCache: c,
+		stateSummaryCache:    cache.NewStateSummaryCache(),
+	}
+	err = r.initCaches()
+	require.NoError(t, err)
+	// Set beacon block as bad.
+	r.setBadBlock(context.Background(), root)
+	buf := new(bytes.Buffer)
+	_, err = p.Encoding().EncodeGossip(buf, signedAggregateAndProof)
+	require.NoError(t, err)
+
+	msg := &pubsub.Message{
+		Message: &pubsubpb.Message{
+			Data: buf.Bytes(),
+			TopicIDs: []string{
+				p2p.GossipTypeMapping[reflect.TypeOf(signedAggregateAndProof)],
+			},
+		},
+	}
+
+	assert.Equal(t, pubsub.ValidationReject, r.validateAggregateAndProof(context.Background(), "", msg), "Validated status is true")
 }

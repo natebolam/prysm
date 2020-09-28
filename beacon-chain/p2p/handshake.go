@@ -10,7 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/peers"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -26,9 +26,7 @@ func peerMultiaddrString(conn network.Conn) string {
 // AddConnectionHandler adds a callback function which handles the connection with a
 // newly added peer. It performs a handshake with that peer by sending a hello request
 // and validating the response from the peer.
-func (s *Service) AddConnectionHandler(reqFunc func(ctx context.Context, id peer.ID) error,
-	goodbyeFunc func(ctx context.Context, id peer.ID) error) {
-
+func (s *Service) AddConnectionHandler(reqFunc func(ctx context.Context, id peer.ID) error) {
 	// Peer map and lock to keep track of current connection attempts.
 	peerMap := make(map[peer.ID]bool)
 	peerLock := new(sync.Mutex)
@@ -100,7 +98,7 @@ func (s *Service) AddConnectionHandler(reqFunc func(ctx context.Context, id peer
 				if conn.Stat().Direction == network.DirInbound {
 					_, err := s.peers.ChainState(remotePeer)
 					peerExists := err == nil
-					currentTime := roughtime.Now()
+					currentTime := timeutils.Now()
 
 					// Wait for peer to initiate handshake
 					time.Sleep(timeForStatus)
@@ -133,15 +131,8 @@ func (s *Service) AddConnectionHandler(reqFunc func(ctx context.Context, id peer
 				}
 
 				s.peers.SetConnectionState(conn.RemotePeer(), peers.PeerConnecting)
-				if err := reqFunc(context.Background(), conn.RemotePeer()); err != nil && err != io.EOF {
+				if err := reqFunc(context.TODO(), conn.RemotePeer()); err != nil && err != io.EOF {
 					log.WithError(err).Trace("Handshake failed")
-					if err.Error() == "protocol not supported" {
-						// This is only to ensure the smooth running of our testnets. This will not be
-						// used in production.
-						log.Debug("Not disconnecting peer with unsupported protocol. This maybe the relay node.")
-						s.peers.SetConnectionState(conn.RemotePeer(), peers.PeerDisconnected)
-						return
-					}
 					disconnectFromPeer()
 					return
 				}
@@ -169,8 +160,7 @@ func (s *Service) AddDisconnectionHandler(handler func(ctx context.Context, id p
 					priorState = peers.PeerDisconnected
 				}
 				s.peers.SetConnectionState(conn.RemotePeer(), peers.PeerDisconnecting)
-				ctx := context.Background()
-				if err := handler(ctx, conn.RemotePeer()); err != nil {
+				if err := handler(context.TODO(), conn.RemotePeer()); err != nil {
 					log.WithError(err).Error("Disconnect handler failed")
 				}
 				s.peers.SetConnectionState(conn.RemotePeer(), peers.PeerDisconnected)

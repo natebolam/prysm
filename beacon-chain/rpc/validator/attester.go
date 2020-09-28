@@ -12,7 +12,6 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
@@ -98,17 +97,20 @@ func (vs *Server) GetAttestationData(ctx context.Context, req *ethpb.Attestation
 	}
 
 	if helpers.CurrentEpoch(headState) < helpers.SlotToEpoch(req.Slot) {
-		headState, err = state.ProcessSlots(ctx, headState, helpers.StartSlot(helpers.SlotToEpoch(req.Slot)))
+		headState, err = state.ProcessSlots(ctx, headState, req.Slot)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Could not process slots up to %d: %v", req.Slot, err)
 		}
 	}
 
 	targetEpoch := helpers.CurrentEpoch(headState)
-	epochStartSlot := helpers.StartSlot(targetEpoch)
+	epochStartSlot, err := helpers.StartSlot(targetEpoch)
+	if err != nil {
+		return nil, err
+	}
 	targetRoot := make([]byte, 32)
 	if epochStartSlot == headState.Slot() {
-		targetRoot = headRoot[:]
+		targetRoot = headRoot
 	} else {
 		targetRoot, err = helpers.BlockRootAtSlot(headState, epochStartSlot)
 		if err != nil {
@@ -122,7 +124,7 @@ func (vs *Server) GetAttestationData(ctx context.Context, req *ethpb.Attestation
 	res = &ethpb.AttestationData{
 		Slot:            req.Slot,
 		CommitteeIndex:  req.CommitteeIndex,
-		BeaconBlockRoot: headRoot[:],
+		BeaconBlockRoot: headRoot,
 		Source:          headState.CurrentJustifiedCheckpoint(),
 		Target: &ethpb.Checkpoint{
 			Epoch: targetEpoch,
@@ -146,7 +148,7 @@ func (vs *Server) ProposeAttestation(ctx context.Context, att *ethpb.Attestation
 		return nil, status.Error(codes.InvalidArgument, "Incorrect attestation signature")
 	}
 
-	root, err := stateutil.AttestationDataRoot(att.Data)
+	root, err := att.Data.HashTreeRoot()
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not tree hash attestation: %v", err)
 	}

@@ -5,7 +5,6 @@ package kv
 import (
 	"os"
 	"path"
-	"sync"
 	"time"
 
 	"github.com/dgraph-io/ristretto"
@@ -40,8 +39,6 @@ type Store struct {
 	databasePath        string
 	blockCache          *ristretto.Cache
 	validatorIndexCache *ristretto.Cache
-	stateSlotBitLock    sync.Mutex
-	blockSlotBitLock    sync.Mutex
 	stateSummaryCache   *cache.StateSummaryCache
 }
 
@@ -49,7 +46,7 @@ type Store struct {
 // path specified, creates the kv-buckets based on the schema, and stores
 // an open connection db object as a property of the Store struct.
 func NewKVStore(dirPath string, stateSummaryCache *cache.StateSummaryCache) (*Store, error) {
-	if err := os.MkdirAll(dirPath, 0700); err != nil {
+	if err := os.MkdirAll(dirPath, params.BeaconIoConfig().ReadWriteExecutePermissions); err != nil {
 		return nil, err
 	}
 	datafile := path.Join(dirPath, databaseFileName)
@@ -98,14 +95,8 @@ func NewKVStore(dirPath string, stateSummaryCache *cache.StateSummaryCache) (*St
 			voluntaryExitsBucket,
 			chainMetadataBucket,
 			checkpointBucket,
-			archivedValidatorSetChangesBucket,
-			archivedCommitteeInfoBucket,
-			archivedBalancesBucket,
-			archivedValidatorParticipationBucket,
 			powchainBucket,
 			stateSummaryBucket,
-			archivedIndexRootBucket,
-			slotsHasObjectBucket,
 			// Indices buckets.
 			attestationHeadBlockRootBucket,
 			attestationSourceRootIndicesBucket,
@@ -113,10 +104,13 @@ func NewKVStore(dirPath string, stateSummaryCache *cache.StateSummaryCache) (*St
 			attestationTargetRootIndicesBucket,
 			attestationTargetEpochIndicesBucket,
 			blockSlotIndicesBucket,
+			stateSlotIndicesBucket,
 			blockParentRootIndicesBucket,
 			finalizedBlockRootsIndexBucket,
 			// New State Management service bucket.
 			newStateServiceCompatibleBucket,
+			// Migrations
+			migrationsBucket,
 		)
 	}); err != nil {
 		return nil, err

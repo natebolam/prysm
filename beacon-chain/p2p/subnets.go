@@ -1,15 +1,100 @@
 package p2p
 
 import (
+	"context"
+	"sync"
+
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
+	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/prysmaticlabs/go-bitfield"
+	"go.opencensus.io/trace"
+
+	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
 var attestationSubnetCount = params.BeaconNetworkConfig().AttestationSubnetCount
 
 var attSubnetEnrKey = params.BeaconNetworkConfig().AttSubnetKey
+
+// FindPeersWithSubnet performs a network search for peers
+// subscribed to a particular subnet. Then we try to connect
+// with those peers.
+func (s *Service) FindPeersWithSubnet(ctx context.Context, index uint64) (bool, error) {
+	ctx, span := trace.StartSpan(ctx, "p2p.FindPeersWithSubnet")
+	defer span.End()
+
+	span.AddAttributes(trace.Int64Attribute("index", int64(index)))
+
+	if s.dv5Listener == nil {
+		// return if discovery isn't set
+		return false, nil
+	}
+	iterator := s.dv5Listener.RandomNodes()
+	nodes := enode.ReadNodes(iterator, lookupLimit)
+	exists := false
+	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		if node.IP() == nil {
+			continue
+		}
+		// do not look for nodes with no tcp port set
+		if err := node.Record().Load(enr.WithEntry("tcp", new(enr.TCP))); err != nil {
+			if !enr.IsNotFound(err) {
+				log.WithError(err).Debug("Could not retrieve tcp port")
+			}
+			continue
+		}
+		subnets, err := retrieveAttSubnets(node.Record())
+		if err != nil {
+			log.Debugf("could not retrieve subnets: %v", err)
+			continue
+		}
+		for _, comIdx := range subnets {
+			if comIdx == index {
+				info, multiAddr, err := convertToAddrInfo(node)
+				if err != nil {
+					return false, err
+				}
+				if s.peers.IsActive(info.ID) {
+					exists = true
+					continue
+				}
+				if s.host.Network().Connectedness(info.ID) == network.Connected {
+					exists = true
+					continue
+				}
+				s.peers.Add(node.Record(), info.ID, multiAddr, network.DirUnknown)
+				if err := s.connectWithPeer(ctx, *info); err != nil {
+					log.WithError(err).Tracef("Could not connect with peer %s", info.String())
+					continue
+				}
+				exists = true
+			}
+		}
+	}
+	return exists, nil
+}
+
+func (s *Service) hasPeerWithSubnet(subnet uint64) bool {
+	return len(s.Peers().SubscribedToSubnet(subnet)) > 0
+}
+
+// Updates the service's discv5 listener record's attestation subnet
+// with a new value for a bitfield of subnets tracked. It also updates
+// the node's metadata by increasing the sequence number and the
+// subnets tracked by the node.
+func (s *Service) updateSubnetRecordWithMetadata(bitV bitfield.Bitvector64) {
+	entry := enr.WithEntry(attSubnetEnrKey, &bitV)
+	s.dv5Listener.LocalNode().Set(entry)
+	s.metaData = &pb.MetaData{
+		SeqNumber: s.metaData.SeqNumber + 1,
+		Attnets:   bitV,
+	}
+}
 
 // Initializes a bitvector of attestation subnets beacon nodes is subscribed to
 // and creates a new ENR entry with its default value.
@@ -46,4 +131,15 @@ func retrieveBitvector(record *enr.Record) (bitfield.Bitvector64, error) {
 		return nil, err
 	}
 	return bitV, nil
+}
+
+func (s *Service) subnetLocker(i uint64) *sync.RWMutex {
+	s.subnetsLockLock.Lock()
+	defer s.subnetsLockLock.Unlock()
+	l, ok := s.subnetsLock[i]
+	if !ok {
+		l = &sync.RWMutex{}
+		s.subnetsLock[i] = l
+	}
+	return l
 }

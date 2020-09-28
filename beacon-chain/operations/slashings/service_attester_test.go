@@ -2,26 +2,23 @@ package slashings
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/shared/bls"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 
-	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func validAttesterSlashingForValIdx(t *testing.T, beaconState *state.BeaconState, privs []bls.SecretKey, valIdx ...uint64) *ethpb.AttesterSlashing {
 	slashings := []*ethpb.AttesterSlashing{}
 	for _, idx := range valIdx {
 		slashing, err := testutil.GenerateAttesterSlashingForValidator(beaconState, privs[idx], idx)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		slashings = append(slashings, slashing)
 	}
 	allSig1 := []bls.Signature{}
@@ -30,13 +27,9 @@ func validAttesterSlashingForValIdx(t *testing.T, beaconState *state.BeaconState
 		sig1 := slashing.Attestation_1.Signature
 		sig2 := slashing.Attestation_2.Signature
 		sigFromBytes1, err := bls.SignatureFromBytes(sig1)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		sigFromBytes2, err := bls.SignatureFromBytes(sig2)
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		allSig1 = append(allSig1, sigFromBytes1)
 		allSig2 = append(allSig2, sigFromBytes2)
 	}
@@ -87,52 +80,32 @@ func TestPool_InsertAttesterSlashing(t *testing.T) {
 	slashings := make([]*ethpb.AttesterSlashing, 20)
 	for i := 0; i < len(pendingSlashings); i++ {
 		sl, err := testutil.GenerateAttesterSlashingForValidator(beaconState, privKeys[i], uint64(i))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		pendingSlashings[i] = &PendingAttesterSlashing{
 			attesterSlashing: sl,
 			validatorToSlash: uint64(i),
 		}
 		slashings[i] = sl
 	}
-	if err := beaconState.SetSlot(helpers.StartSlot(1)); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.SetSlot(params.BeaconConfig().SlotsPerEpoch))
 
 	// We mark the following validators with some preconditions.
 	exitedVal, err := beaconState.ValidatorAtIndex(uint64(2))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	exitedVal.WithdrawableEpoch = 0
-	if err := beaconState.UpdateValidatorAtIndex(uint64(2), exitedVal); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(uint64(2), exitedVal))
 	futureWithdrawVal, err := beaconState.ValidatorAtIndex(uint64(4))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	futureWithdrawVal.WithdrawableEpoch = 17
-	if err := beaconState.UpdateValidatorAtIndex(uint64(4), futureWithdrawVal); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(uint64(4), futureWithdrawVal))
 	slashedVal, err := beaconState.ValidatorAtIndex(uint64(5))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	slashedVal.Slashed = true
-	if err := beaconState.UpdateValidatorAtIndex(uint64(5), slashedVal); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(uint64(5), slashedVal))
 	slashedVal2, err := beaconState.ValidatorAtIndex(uint64(21))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	slashedVal2.Slashed = true
-	if err := beaconState.UpdateValidatorAtIndex(uint64(21), slashedVal2); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(uint64(21), slashedVal2))
 
 	aggSlashing1 := validAttesterSlashingForValIdx(t, beaconState, privKeys, 0, 1, 2)
 	aggSlashing2 := validAttesterSlashingForValIdx(t, beaconState, privKeys, 5, 9, 13)
@@ -306,34 +279,17 @@ func TestPool_InsertAttesterSlashing(t *testing.T) {
 			var err error
 			for i := 0; i < len(tt.args.slashings); i++ {
 				err = p.InsertAttesterSlashing(context.Background(), beaconState, tt.args.slashings[i])
-				if (err != nil) != tt.fields.wantErr[i] {
-					t.Fatalf("Unexpected expect error at %d: %v", i, err)
+				if tt.fields.wantErr[i] {
+					assert.NotNil(t, err)
+				} else {
+					assert.NoError(t, err)
 				}
 			}
-			if len(p.pendingAttesterSlashing) != len(tt.want) {
-				t.Fatalf(
-					"Mismatched lengths of pending list. Got %d, wanted %d.",
-					len(p.pendingAttesterSlashing),
-					len(tt.want),
-				)
-			}
+			assert.Equal(t, len(tt.want), len(p.pendingAttesterSlashing))
+
 			for i := range p.pendingAttesterSlashing {
-				if p.pendingAttesterSlashing[i].validatorToSlash != tt.want[i].validatorToSlash {
-					t.Errorf(
-						"Pending attester to slash at index %d does not match expected. Got=%v wanted=%v",
-						i,
-						p.pendingAttesterSlashing[i].validatorToSlash,
-						tt.want[i].validatorToSlash,
-					)
-				}
-				if !proto.Equal(p.pendingAttesterSlashing[i].attesterSlashing, tt.want[i].attesterSlashing) {
-					t.Errorf(
-						"Pending attester slashing at index %d does not match expected. Got=%v wanted=%v",
-						i,
-						p.pendingAttesterSlashing[i],
-						tt.want[i],
-					)
-				}
+				assert.Equal(t, tt.want[i].validatorToSlash, p.pendingAttesterSlashing[i].validatorToSlash)
+				assert.DeepEqual(t, tt.want[i].attesterSlashing, p.pendingAttesterSlashing[i].attesterSlashing, "At index %d", i)
 			}
 		})
 	}
@@ -349,9 +305,7 @@ func TestPool_InsertAttesterSlashing_SigFailsVerify_ClearPool(t *testing.T) {
 	slashings := make([]*ethpb.AttesterSlashing, 2)
 	for i := 0; i < 2; i++ {
 		sl, err := testutil.GenerateAttesterSlashingForValidator(beaconState, privKeys[i], uint64(i))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		pendingSlashings[i] = &PendingAttesterSlashing{
 			attesterSlashing: sl,
 			validatorToSlash: uint64(i),
@@ -366,24 +320,10 @@ func TestPool_InsertAttesterSlashing_SigFailsVerify_ClearPool(t *testing.T) {
 	p := &Pool{
 		pendingAttesterSlashing: make([]*PendingAttesterSlashing, 0),
 	}
-	if err := p.InsertAttesterSlashing(
-		context.Background(),
-		beaconState,
-		slashings[0],
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := p.InsertAttesterSlashing(
-		context.Background(),
-		beaconState,
-		slashings[1],
-	); err == nil {
-		t.Error("Expected error when inserting slashing with bad sig, got nil")
-	}
-	// We expect to only have 1 pending attester slashing in the pool.
-	if len(p.pendingAttesterSlashing) != 1 {
-		t.Error("Expected failed attester slashing to have been cleared from pool")
-	}
+	require.NoError(t, p.InsertAttesterSlashing(context.Background(), beaconState, slashings[0]))
+	err := p.InsertAttesterSlashing(context.Background(), beaconState, slashings[1])
+	require.ErrorContains(t, "could not verify attester slashing", err, "Expected error when inserting slashing with bad sig")
+	assert.Equal(t, 1, len(p.pendingAttesterSlashing))
 }
 
 func TestPool_MarkIncludedAttesterSlashing(t *testing.T) {
@@ -499,26 +439,11 @@ func TestPool_MarkIncludedAttesterSlashing(t *testing.T) {
 				included:                tt.fields.included,
 			}
 			p.MarkIncludedAttesterSlashing(tt.args.slashing)
-			if len(p.pendingAttesterSlashing) != len(tt.want.pending) {
-				t.Fatalf(
-					"Mismatched lengths of pending list. Got %d, wanted %d.",
-					len(p.pendingAttesterSlashing),
-					len(tt.want.pending),
-				)
-			}
+			assert.Equal(t, len(tt.want.pending), len(p.pendingAttesterSlashing))
 			for i := range p.pendingAttesterSlashing {
-				if !reflect.DeepEqual(p.pendingAttesterSlashing[i], tt.want.pending[i]) {
-					t.Errorf(
-						"Pending attester slashing at index %d does not match expected. Got=%v wanted=%v",
-						i,
-						p.pendingAttesterSlashing[i],
-						tt.want.pending[i],
-					)
-				}
+				assert.DeepEqual(t, tt.want.pending[i], p.pendingAttesterSlashing[i])
 			}
-			if !reflect.DeepEqual(p.included, tt.want.included) {
-				t.Errorf("Included map is not as expected. Got=%v wanted=%v", p.included, tt.want.included)
-			}
+			assert.DeepEqual(t, tt.want.included, p.included)
 		})
 	}
 }
@@ -533,9 +458,7 @@ func TestPool_PendingAttesterSlashings(t *testing.T) {
 	slashings := make([]*ethpb.AttesterSlashing, 20)
 	for i := 0; i < len(pendingSlashings); i++ {
 		sl, err := testutil.GenerateAttesterSlashingForValidator(beaconState, privKeys[i], uint64(i))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		pendingSlashings[i] = &PendingAttesterSlashing{
 			attesterSlashing: sl,
 			validatorToSlash: uint64(i),
@@ -574,11 +497,7 @@ func TestPool_PendingAttesterSlashings(t *testing.T) {
 			p := &Pool{
 				pendingAttesterSlashing: tt.fields.pending,
 			}
-			if got := p.PendingAttesterSlashings(
-				context.Background(), beaconState,
-			); !reflect.DeepEqual(tt.want, got) {
-				t.Errorf("Unexpected return from PendingAttesterSlashings, wanted %v, received %v", tt.want, got)
-			}
+			assert.DeepEqual(t, tt.want, p.PendingAttesterSlashings(context.Background(), beaconState))
 		})
 	}
 }
@@ -593,36 +512,22 @@ func TestPool_PendingAttesterSlashings_Slashed(t *testing.T) {
 	params.OverrideBeaconConfig(conf)
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, 64)
 	val, err := beaconState.ValidatorAtIndex(0)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	val.Slashed = true
-	if err := beaconState.UpdateValidatorAtIndex(0, val); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(0, val))
 	val, err = beaconState.ValidatorAtIndex(3)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	val.Slashed = true
-	if err := beaconState.UpdateValidatorAtIndex(3, val); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(3, val))
 	val, err = beaconState.ValidatorAtIndex(5)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	val.Slashed = true
-	if err := beaconState.UpdateValidatorAtIndex(5, val); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, beaconState.UpdateValidatorAtIndex(5, val))
 	pendingSlashings := make([]*PendingAttesterSlashing, 20)
 	slashings := make([]*ethpb.AttesterSlashing, 20)
 	for i := 0; i < len(pendingSlashings); i++ {
 		sl, err := testutil.GenerateAttesterSlashingForValidator(beaconState, privKeys[i], uint64(i))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		pendingSlashings[i] = &PendingAttesterSlashing{
 			attesterSlashing: sl,
 			validatorToSlash: uint64(i),
@@ -652,9 +557,7 @@ func TestPool_PendingAttesterSlashings_Slashed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Pool{pendingAttesterSlashing: tt.fields.pending}
-			if got := p.PendingAttesterSlashings(context.Background(), beaconState); !reflect.DeepEqual(tt.want, got) {
-				t.Errorf("Unexpected return from PendingAttesterSlashings, \nwanted %v, \nreceived %v", tt.want, got)
-			}
+			assert.DeepEqual(t, tt.want, p.PendingAttesterSlashings(context.Background(), beaconState))
 		})
 	}
 }
@@ -669,9 +572,7 @@ func TestPool_PendingAttesterSlashings_NoDuplicates(t *testing.T) {
 	slashings := make([]*ethpb.AttesterSlashing, 3)
 	for i := 0; i < 2; i++ {
 		sl, err := testutil.GenerateAttesterSlashingForValidator(beaconState, privKeys[i], uint64(i))
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		pendingSlashings[i] = &PendingAttesterSlashing{
 			attesterSlashing: sl,
 			validatorToSlash: uint64(i),
@@ -684,10 +585,5 @@ func TestPool_PendingAttesterSlashings_NoDuplicates(t *testing.T) {
 	p := &Pool{
 		pendingAttesterSlashing: pendingSlashings,
 	}
-	want := slashings[0:2]
-	if got := p.PendingAttesterSlashings(
-		context.Background(), beaconState,
-	); !reflect.DeepEqual(want, got) {
-		t.Errorf("Unexpected return from PendingAttesterSlashings, wanted %v, received %v", want, got)
-	}
+	assert.DeepEqual(t, slashings[0:2], p.PendingAttesterSlashings(context.Background(), beaconState))
 }

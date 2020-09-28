@@ -29,7 +29,7 @@ var (
 		Usage: "Key for secure gRPC. Pass this and the tls-cert flag in order to use gRPC securely.",
 	}
 	// MonitoringPortFlag defines the http port used to serve prometheus metrics.
-	MonitoringPortFlag = &cli.Int64Flag{
+	MonitoringPortFlag = &cli.IntFlag{
 		Name:  "monitoring-port",
 		Usage: "Port used to listening and respond metrics for prometheus.",
 		Value: 8082,
@@ -46,9 +46,15 @@ var (
 		Usage: "RPC port exposed by the slasher",
 		Value: 4002,
 	}
-	// RebuildSpanMapsFlag iterate through all indexed attestations in db and update all validators span maps from scratch.
-	RebuildSpanMapsFlag = &cli.BoolFlag{
-		Name:  "rebuild-span-maps",
-		Usage: "Rebuild span maps from indexed attestations in db",
+	// EnableHistoricalDetectionFlag is a flag to enable historical detection for the slasher. Requires --historical-slasher-node on the beacon node.
+	EnableHistoricalDetectionFlag = &cli.BoolFlag{
+		Name:  "enable-historical-detection",
+		Usage: "Enables historical attestation detection for the slasher. Requires --historical-slasher-node on the beacon node.",
+	}
+	// SpanCacheSize is a flag that sets the size of span cache.
+	SpanCacheSize = &cli.IntFlag{
+		Name:  "spans-cache-size",
+		Usage: "Sets the span cache size.",
+		Value: 1500,
 	}
 )

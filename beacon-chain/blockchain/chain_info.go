@@ -5,14 +5,14 @@ import (
 	"time"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"go.opencensus.io/trace"
+
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/forkchoice/protoarray"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"go.opencensus.io/trace"
 )
 
 // ChainInfoFetcher defines a common interface for methods in blockchain service which
@@ -57,6 +57,7 @@ type ForkFetcher interface {
 // CanonicalFetcher retrieves the current chain's canonical information.
 type CanonicalFetcher interface {
 	IsCanonical(ctx context.Context, blockRoot [32]byte) (bool, error)
+	VerifyBlkDescendant(ctx context.Context, blockRoot [32]byte) error
 }
 
 // FinalizationFetcher defines a common interface for methods in blockchain service which
@@ -118,7 +119,7 @@ func (s *Service) HeadRoot(ctx context.Context) ([]byte, error) {
 		return params.BeaconConfig().ZeroHash[:], nil
 	}
 
-	r, err := stateutil.BlockRoot(b.Block)
+	r, err := b.Block.HashTreeRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +142,7 @@ func (s *Service) HeadBlock(ctx context.Context) (*ethpb.SignedBeaconBlock, erro
 // If the head is nil from service struct,
 // it will attempt to get the head state from DB.
 func (s *Service) HeadState(ctx context.Context) (*state.BeaconState, error) {
-	ctx, span := trace.StartSpan(ctx, "blockchain.HeadState")
+	ctx, span := trace.StartSpan(ctx, "blockChain.HeadState")
 	defer span.End()
 
 	ok := s.hasHeadState()

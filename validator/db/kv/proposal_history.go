@@ -29,7 +29,7 @@ func (store *Store) ProposalHistoryForEpoch(ctx context.Context, publicKey []byt
 			return fmt.Errorf("validator history empty for public key %#x", publicKey)
 		}
 		slotBits := valBucket.Get(bytesutil.Bytes8(epoch))
-		if slotBits == nil || len(slotBits) == 0 {
+		if len(slotBits) == 0 {
 			slotBitlist = bitfield.NewBitlist(params.BeaconConfig().SlotsPerEpoch)
 			return nil
 		}
@@ -61,15 +61,14 @@ func (store *Store) SaveProposalHistoryForEpoch(ctx context.Context, pubKey []by
 	return err
 }
 
-// DeleteProposalHistory deletes the proposal history for the corresponding validator public key.
-func (store *Store) DeleteProposalHistory(ctx context.Context, pubkey []byte) error {
-	ctx, span := trace.StartSpan(ctx, "Validator.DeleteProposalHistory")
-	defer span.End()
-
+// UpdatePublicKeysBuckets for a specified list of keys.
+func (store *Store) UpdatePublicKeysBuckets(pubKeys [][48]byte) error {
 	return store.update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(historicProposalsBucket)
-		if err := bucket.DeleteBucket(pubkey); err != nil {
-			return errors.Wrap(err, "failed to delete the proposal history")
+		for _, pubKey := range pubKeys {
+			if _, err := bucket.CreateBucketIfNotExists(pubKey[:]); err != nil {
+				return errors.Wrap(err, "failed to create proposal history bucket")
+			}
 		}
 		return nil
 	})
@@ -85,21 +84,9 @@ func pruneProposalHistory(valBucket *bolt.Bucket, newestEpoch uint64) error {
 				return errors.Wrapf(err, "could not prune epoch %d in proposal history", epoch)
 			}
 		} else {
-			// If starting from the oldest, we stop finding anything prunable, stop pruning.
+			// If starting from the oldest, we dont find anything prunable, stop pruning.
 			break
 		}
 	}
 	return nil
-}
-
-func (store *Store) initializeSubBuckets(pubKeys [][48]byte) error {
-	return store.update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(historicProposalsBucket)
-		for _, pubKey := range pubKeys {
-			if _, err := bucket.CreateBucketIfNotExists(pubKey[:]); err != nil {
-				return errors.Wrap(err, "failed to create proposal history bucket")
-			}
-		}
-		return nil
-	})
 }

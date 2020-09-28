@@ -20,12 +20,15 @@ func (bs *Server) ListBeaconCommittees(
 	ctx context.Context,
 	req *ethpb.ListCommitteesRequest,
 ) (*ethpb.BeaconCommittees, error) {
-
 	currentSlot := bs.GenesisTimeFetcher.CurrentSlot()
 	var requestedSlot uint64
 	switch q := req.QueryFilter.(type) {
 	case *ethpb.ListCommitteesRequest_Epoch:
-		requestedSlot = helpers.StartSlot(q.Epoch)
+		startSlot, err := helpers.StartSlot(q.Epoch)
+		if err != nil {
+			return nil, err
+		}
+		requestedSlot = startSlot
 	case *ethpb.ListCommitteesRequest_Genesis:
 		requestedSlot = 0
 	default:
@@ -64,7 +67,10 @@ func (bs *Server) retrieveCommitteesForEpoch(
 	ctx context.Context,
 	epoch uint64,
 ) (map[uint64]*ethpb.BeaconCommittees_CommitteesList, []uint64, error) {
-	startSlot := helpers.StartSlot(epoch)
+	startSlot, err := helpers.StartSlot(epoch)
+	if err != nil {
+		return nil, nil, err
+	}
 	requestedState, err := bs.StateGen.StateBySlot(ctx, startSlot)
 	if err != nil {
 		return nil, nil, status.Error(codes.Internal, "Could not get state")
@@ -111,7 +117,10 @@ func (bs *Server) retrieveCommitteesForRoot(
 		return nil, nil, status.Error(codes.Internal, "Could not get active indices")
 	}
 
-	startSlot := helpers.StartSlot(epoch)
+	startSlot, err := helpers.StartSlot(epoch)
+	if err != nil {
+		return nil, nil, err
+	}
 	committeesListsBySlot, err := computeCommittees(startSlot, activeIndices, seed)
 	if err != nil {
 		return nil, nil, status.Errorf(
@@ -131,7 +140,7 @@ func computeCommittees(
 	activeIndices []uint64,
 	attesterSeed [32]byte,
 ) (map[uint64]*ethpb.BeaconCommittees_CommitteesList, error) {
-	committeesListsBySlot := make(map[uint64]*ethpb.BeaconCommittees_CommitteesList)
+	committeesListsBySlot := make(map[uint64]*ethpb.BeaconCommittees_CommitteesList, params.BeaconConfig().SlotsPerEpoch)
 	for slot := startSlot; slot < startSlot+params.BeaconConfig().SlotsPerEpoch; slot++ {
 		var countAtSlot = uint64(len(activeIndices)) / params.BeaconConfig().SlotsPerEpoch / params.BeaconConfig().TargetCommitteeSize
 		if countAtSlot > params.BeaconConfig().MaxCommitteesPerSlot {

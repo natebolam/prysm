@@ -16,12 +16,12 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/debug"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/logutil"
+	_ "github.com/prysmaticlabs/prysm/shared/maxprocs"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 	"github.com/urfave/cli/v2/altsrc"
 	prefixed "github.com/x-cray/logrus-prefixed-formatter"
-	_ "go.uber.org/automaxprocs"
 )
 
 var appFlags = []cli.Flag{
@@ -34,12 +34,12 @@ var appFlags = []cli.Flag{
 	flags.DisableGRPCGateway,
 	flags.GRPCGatewayHost,
 	flags.GRPCGatewayPort,
+	flags.GPRCGatewayCorsDomain,
 	flags.MinSyncPeers,
 	flags.ContractDeploymentBlock,
 	flags.SetGCPercent,
 	flags.UnsafeSync,
-	flags.SlasherCertFlag,
-	flags.SlasherProviderFlag,
+	flags.DisableSync,
 	flags.DisableDiscv5,
 	flags.BlockBatchLimit,
 	flags.BlockBatchLimitBurstFactor,
@@ -49,9 +49,12 @@ var appFlags = []cli.Flag{
 	flags.InteropGenesisTimeFlag,
 	flags.SlotsPerArchivedPoint,
 	flags.EnableDebugRPCEndpoints,
+	flags.HistoricalSlasherNode,
+	flags.ChainID,
+	flags.NetworkID,
+	flags.WeakSubjectivityCheckpt,
 	cmd.MinimalConfigFlag,
 	cmd.E2EConfigFlag,
-	cmd.CustomGenesisDelayFlag,
 	cmd.RPCMaxPageSizeFlag,
 	cmd.BootstrapNode,
 	cmd.NoDiscovery,

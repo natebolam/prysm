@@ -6,9 +6,10 @@ import (
 	"sort"
 	"time"
 
+	"github.com/libp2p/go-libp2p-core/peer"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 )
 
 const (
@@ -43,6 +44,7 @@ type stateMachine struct {
 	smm     *stateMachineManager
 	start   uint64
 	state   stateID
+	pid     peer.ID
 	blocks  []*eth.SignedBeaconBlock
 	updated time.Time
 }
@@ -76,7 +78,7 @@ func (smm *stateMachineManager) addStateMachine(start uint64) *stateMachine {
 		start:   start,
 		state:   stateNew,
 		blocks:  []*eth.SignedBeaconBlock{},
-		updated: roughtime.Now(),
+		updated: timeutils.Now(),
 	}
 	smm.recalculateMachineAttribs()
 	return smm.machines[start]
@@ -155,7 +157,7 @@ func (m *stateMachine) setState(name stateID) {
 		return
 	}
 	m.state = name
-	m.updated = roughtime.Now()
+	m.updated = timeutils.Now()
 }
 
 // trigger invokes the event handler on a given state machine.
@@ -176,18 +178,12 @@ func (m *stateMachine) trigger(event eventID, data interface{}) error {
 
 // isFirst checks whether a given machine has the lowest start block.
 func (m *stateMachine) isFirst() bool {
-	if m.start == (*m.smm).keys[0] {
-		return true
-	}
-	return false
+	return m.start == (*m.smm).keys[0]
 }
 
 // isLast checks whether a given machine has the highest start block.
 func (m *stateMachine) isLast() bool {
-	if m.start == (*m.smm).keys[len((*m.smm).keys)-1] {
-		return true
-	}
-	return false
+	return m.start == (*m.smm).keys[len((*m.smm).keys)-1]
 }
 
 // String returns human-readable representation of a FSM state.

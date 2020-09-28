@@ -10,7 +10,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 )
 
 // SlotSignature returns the signed signature of the hash tree root of input slot.
@@ -124,7 +124,13 @@ func ComputeSubnetFromCommitteeAndSlot(activeValCount, comIdx, attSlot uint64) u
 //   valid_attestation_slot = 98
 // In the attestation must be within the range of 95 to 100 in the example above.
 func ValidateAttestationTime(attSlot uint64, genesisTime time.Time) error {
-	attTime := genesisTime.Add(time.Duration(attSlot*params.BeaconConfig().SecondsPerSlot) * time.Second)
+	if err := ValidateSlotClock(attSlot, uint64(genesisTime.Unix())); err != nil {
+		return err
+	}
+	attTime, err := SlotToTime(uint64(genesisTime.Unix()), attSlot)
+	if err != nil {
+		return err
+	}
 	currentSlot := SlotsSince(genesisTime)
 
 	// A clock disparity allows for minor tolerances outside of the expected range. This value is
@@ -133,7 +139,7 @@ func ValidateAttestationTime(attSlot uint64, genesisTime time.Time) error {
 
 	// An attestation cannot be from the future, so the upper bounds is set to now, with a minor
 	// tolerance for peer clock disparity.
-	upperBounds := roughtime.Now().Add(clockDisparity)
+	upperBounds := timeutils.Now().Add(clockDisparity)
 
 	// An attestation cannot be older than the current slot - attestation propagation slot range
 	// with a minor tolerance for peer clock disparity.
@@ -141,16 +147,18 @@ func ValidateAttestationTime(attSlot uint64, genesisTime time.Time) error {
 	if currentSlot > params.BeaconNetworkConfig().AttestationPropagationSlotRange {
 		lowerBoundsSlot = currentSlot - params.BeaconNetworkConfig().AttestationPropagationSlotRange
 	}
-	lowerBounds := genesisTime.Add(
-		time.Duration(lowerBoundsSlot*params.BeaconConfig().SecondsPerSlot) * time.Second,
-	).Add(-clockDisparity)
+	lowerTime, err := SlotToTime(uint64(genesisTime.Unix()), lowerBoundsSlot)
+	if err != nil {
+		return err
+	}
+	lowerBounds := lowerTime.Add(-clockDisparity)
 
 	// Verify attestation slot within the time range.
 	if attTime.Before(lowerBounds) || attTime.After(upperBounds) {
 		return fmt.Errorf(
 			"attestation slot %d not within attestation propagation range of %d to %d (current slot)",
 			attSlot,
-			currentSlot-params.BeaconNetworkConfig().AttestationPropagationSlotRange,
+			lowerBoundsSlot,
 			currentSlot,
 		)
 	}

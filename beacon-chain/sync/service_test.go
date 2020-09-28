@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	mockChain "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
@@ -16,13 +15,13 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestService_StatusZeroEpoch(t *testing.T) {
 	bState, err := stateTrie.InitializeFromProto(&pb.BeaconState{Slot: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:         p2ptest.NewTestP2P(t),
 		initialSync: new(mockSync.Sync),
@@ -33,10 +32,7 @@ func TestService_StatusZeroEpoch(t *testing.T) {
 	}
 	r.chainStarted = true
 
-	err = r.Status()
-	if err != nil {
-		t.Errorf("Wanted non failing status but got: %v", err)
-	}
+	assert.NoError(t, r.Status(), "Wanted non failing status")
 }
 
 func TestSyncHandlers_WaitToSync(t *testing.T) {
@@ -68,21 +64,13 @@ func TestSyncHandlers_WaitToSync(t *testing.T) {
 	b := []byte("sk")
 	b32 := bytesutil.ToBytes32(b)
 	sk, err := bls.SecretKeyFromBytes(b32[:])
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	msg := &ethpb.SignedBeaconBlock{
-		Block: &ethpb.BeaconBlock{
-			ParentRoot: testutil.Random32Bytes(t),
-		},
-		Signature: sk.Sign([]byte("data")).Marshal(),
-	}
+	msg := testutil.NewBeaconBlock()
+	msg.Block.ParentRoot = testutil.Random32Bytes(t)
+	msg.Signature = sk.Sign([]byte("data")).Marshal()
 	p2p.ReceivePubSub(topic, msg)
 	// wait for chainstart to be sent
 	time.Sleep(400 * time.Millisecond)
-	if !r.chainStarted {
-		t.Fatal("Did not receive chain start event.")
-	}
-
+	require.Equal(t, true, r.chainStarted, "Did not receive chain start event.")
 }

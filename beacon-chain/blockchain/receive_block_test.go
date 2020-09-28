@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"context"
+	"sync"
 	"testing"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
@@ -11,21 +12,20 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/attestations"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/voluntaryexits"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
-func TestService_ReceiveBlockNoPubsub(t *testing.T) {
+func TestService_ReceiveBlock(t *testing.T) {
 	ctx := context.Background()
 
 	genesis, keys := testutil.DeterministicGenesisState(t, 64)
 	genFullBlock := func(t *testing.T, conf *testutil.BlockGenConfig, slot uint64) *ethpb.SignedBeaconBlock {
 		blk, err := testutil.GenerateFullBlock(genesis, keys, conf, slot)
-		if err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, err)
 		return blk
 	}
 	bc := params.BeaconConfig()
@@ -36,10 +36,10 @@ func TestService_ReceiveBlockNoPubsub(t *testing.T) {
 		block *ethpb.SignedBeaconBlock
 	}
 	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-		check   func(*testing.T, *Service)
+		name      string
+		args      args
+		wantedErr string
+		check     func(*testing.T, *Service)
 	}{
 		{
 			name: "applies block with state transition",
@@ -119,9 +119,7 @@ func TestService_ReceiveBlockNoPubsub(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			db, stateSummaryCache := testDB.SetupDB(t)
 			genesisBlockRoot := bytesutil.ToBytes32(nil)
-			if err := db.SaveState(ctx, genesis, genesisBlockRoot); err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, db.SaveState(ctx, genesis, genesisBlockRoot))
 
 			cfg := &Config{
 				BeaconDB: db,
@@ -136,21 +134,238 @@ func TestService_ReceiveBlockNoPubsub(t *testing.T) {
 				StateGen:      stategen.New(db, stateSummaryCache),
 			}
 			s, err := NewService(ctx, cfg)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := s.saveGenesisData(ctx, genesis); err != nil {
-				t.Fatal(err)
-			}
-			root, err := stateutil.BlockRoot(tt.args.block.Block)
-			if err != nil {
-				t.Error(err)
-			}
-			if err := s.ReceiveBlockNoPubsub(ctx, tt.args.block, root); (err != nil) != tt.wantErr {
-				t.Errorf("ReceiveBlockNoPubsub() error = %v, wantErr %v", err, tt.wantErr)
+			require.NoError(t, err)
+			require.NoError(t, s.saveGenesisData(ctx, genesis))
+			gBlk, err := s.beaconDB.GenesisBlock(ctx)
+			require.NoError(t, err)
+			gRoot, err := gBlk.Block.HashTreeRoot()
+			s.finalizedCheckpt = &ethpb.Checkpoint{Root: gRoot[:]}
+			root, err := tt.args.block.Block.HashTreeRoot()
+			require.NoError(t, err)
+			err = s.ReceiveBlock(ctx, tt.args.block, root)
+			if tt.wantedErr != "" {
+				assert.ErrorContains(t, tt.wantedErr, err)
 			} else {
+				assert.NoError(t, err)
 				tt.check(t, s)
 			}
 		})
+	}
+}
+
+func TestService_ReceiveBlockUpdateHead(t *testing.T) {
+	ctx := context.Background()
+	genesis, keys := testutil.DeterministicGenesisState(t, 64)
+	b, err := testutil.GenerateFullBlock(genesis, keys, testutil.DefaultBlockGenConfig(), 1)
+	assert.NoError(t, err)
+	db, stateSummaryCache := testDB.SetupDB(t)
+	genesisBlockRoot := bytesutil.ToBytes32(nil)
+	require.NoError(t, db.SaveState(ctx, genesis, genesisBlockRoot))
+	cfg := &Config{
+		BeaconDB: db,
+		ForkChoiceStore: protoarray.New(
+			0, // justifiedEpoch
+			0, // finalizedEpoch
+			genesisBlockRoot,
+		),
+		AttPool:       attestations.NewPool(),
+		ExitPool:      voluntaryexits.NewPool(),
+		StateNotifier: &blockchainTesting.MockStateNotifier{RecordEvents: true},
+		StateGen:      stategen.New(db, stateSummaryCache),
+	}
+	s, err := NewService(ctx, cfg)
+	require.NoError(t, err)
+	require.NoError(t, s.saveGenesisData(ctx, genesis))
+	gBlk, err := s.beaconDB.GenesisBlock(ctx)
+	require.NoError(t, err)
+	gRoot, err := gBlk.Block.HashTreeRoot()
+	s.finalizedCheckpt = &ethpb.Checkpoint{Root: gRoot[:]}
+	root, err := b.Block.HashTreeRoot()
+	require.NoError(t, err)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func() {
+		require.NoError(t, s.ReceiveBlock(ctx, b, root))
+		wg.Done()
+	}()
+	wg.Wait()
+	if recvd := len(s.stateNotifier.(*blockchainTesting.MockStateNotifier).ReceivedEvents()); recvd < 1 {
+		t.Errorf("Received %d state notifications, expected at least 1", recvd)
+	}
+	// Verify fork choice has processed the block. (Genesis block and the new block)
+	assert.Equal(t, 2, len(s.forkChoiceStore.Nodes()))
+}
+
+func TestService_ReceiveBlockInitialSync(t *testing.T) {
+	ctx := context.Background()
+
+	genesis, keys := testutil.DeterministicGenesisState(t, 64)
+	genFullBlock := func(t *testing.T, conf *testutil.BlockGenConfig, slot uint64) *ethpb.SignedBeaconBlock {
+		blk, err := testutil.GenerateFullBlock(genesis, keys, conf, slot)
+		assert.NoError(t, err)
+		return blk
+	}
+
+	type args struct {
+		block *ethpb.SignedBeaconBlock
+	}
+	tests := []struct {
+		name      string
+		args      args
+		wantedErr string
+		check     func(*testing.T, *Service)
+	}{
+		{
+			name: "applies block with state transition",
+			args: args{
+				block: genFullBlock(t, testutil.DefaultBlockGenConfig(), 2 /*slot*/),
+			},
+			check: func(t *testing.T, s *Service) {
+				assert.Equal(t, uint64(2), s.head.state.Slot(), "Incorrect head state slot")
+				assert.Equal(t, uint64(2), s.head.block.Block.Slot, "Incorrect head block slot")
+			},
+		},
+		{
+			name: "notifies block processed on state feed",
+			args: args{
+				block: genFullBlock(t, testutil.DefaultBlockGenConfig(), 1 /*slot*/),
+			},
+			check: func(t *testing.T, s *Service) {
+				if recvd := len(s.stateNotifier.(*blockchainTesting.MockStateNotifier).ReceivedEvents()); recvd < 1 {
+					t.Errorf("Received %d state notifications, expected at least 1", recvd)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, stateSummaryCache := testDB.SetupDB(t)
+			genesisBlockRoot := bytesutil.ToBytes32(nil)
+
+			cfg := &Config{
+				BeaconDB: db,
+				ForkChoiceStore: protoarray.New(
+					0, // justifiedEpoch
+					0, // finalizedEpoch
+					genesisBlockRoot,
+				),
+				StateNotifier: &blockchainTesting.MockStateNotifier{RecordEvents: true},
+				StateGen:      stategen.New(db, stateSummaryCache),
+			}
+			s, err := NewService(ctx, cfg)
+			require.NoError(t, err)
+			err = s.saveGenesisData(ctx, genesis)
+			require.NoError(t, err)
+			gBlk, err := s.beaconDB.GenesisBlock(ctx)
+			require.NoError(t, err)
+
+			gRoot, err := gBlk.Block.HashTreeRoot()
+			s.finalizedCheckpt = &ethpb.Checkpoint{Root: gRoot[:]}
+			root, err := tt.args.block.Block.HashTreeRoot()
+			require.NoError(t, err)
+
+			err = s.ReceiveBlockInitialSync(ctx, tt.args.block, root)
+			if tt.wantedErr != "" {
+				assert.ErrorContains(t, tt.wantedErr, err)
+			} else {
+				assert.NoError(t, err)
+				tt.check(t, s)
+			}
+		})
+	}
+}
+
+func TestService_ReceiveBlockBatch(t *testing.T) {
+	ctx := context.Background()
+
+	genesis, keys := testutil.DeterministicGenesisState(t, 64)
+	genFullBlock := func(t *testing.T, conf *testutil.BlockGenConfig, slot uint64) *ethpb.SignedBeaconBlock {
+		blk, err := testutil.GenerateFullBlock(genesis, keys, conf, slot)
+		assert.NoError(t, err)
+		return blk
+	}
+
+	type args struct {
+		block *ethpb.SignedBeaconBlock
+	}
+	tests := []struct {
+		name      string
+		args      args
+		wantedErr string
+		check     func(*testing.T, *Service)
+	}{
+		{
+			name: "applies block with state transition",
+			args: args{
+				block: genFullBlock(t, testutil.DefaultBlockGenConfig(), 2 /*slot*/),
+			},
+			check: func(t *testing.T, s *Service) {
+				assert.Equal(t, uint64(2), s.head.state.Slot(), "Incorrect head state slot")
+				assert.Equal(t, uint64(2), s.head.block.Block.Slot, "Incorrect head block slot")
+			},
+		},
+		{
+			name: "notifies block processed on state feed",
+			args: args{
+				block: genFullBlock(t, testutil.DefaultBlockGenConfig(), 1 /*slot*/),
+			},
+			check: func(t *testing.T, s *Service) {
+				if recvd := len(s.stateNotifier.(*blockchainTesting.MockStateNotifier).ReceivedEvents()); recvd < 1 {
+					t.Errorf("Received %d state notifications, expected at least 1", recvd)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, stateSummaryCache := testDB.SetupDB(t)
+			genesisBlockRoot, err := genesis.HashTreeRoot(ctx)
+			require.NoError(t, err)
+			cfg := &Config{
+				BeaconDB: db,
+				ForkChoiceStore: protoarray.New(
+					0, // justifiedEpoch
+					0, // finalizedEpoch
+					genesisBlockRoot,
+				),
+				StateNotifier: &blockchainTesting.MockStateNotifier{RecordEvents: true},
+				StateGen:      stategen.New(db, stateSummaryCache),
+			}
+			s, err := NewService(ctx, cfg)
+			require.NoError(t, err)
+			err = s.saveGenesisData(ctx, genesis)
+			require.NoError(t, err)
+			gBlk, err := s.beaconDB.GenesisBlock(ctx)
+			require.NoError(t, err)
+
+			gRoot, err := gBlk.Block.HashTreeRoot()
+			s.finalizedCheckpt = &ethpb.Checkpoint{Root: gRoot[:]}
+			root, err := tt.args.block.Block.HashTreeRoot()
+			require.NoError(t, err)
+			blks := []*ethpb.SignedBeaconBlock{tt.args.block}
+			roots := [][32]byte{root}
+			err = s.ReceiveBlockBatch(ctx, blks, roots)
+			if tt.wantedErr != "" {
+				assert.ErrorContains(t, tt.wantedErr, err)
+			} else {
+				assert.NoError(t, err)
+				tt.check(t, s)
+			}
+		})
+	}
+}
+
+func TestService_HasInitSyncBlock(t *testing.T) {
+	s, err := NewService(context.Background(), &Config{})
+	require.NoError(t, err)
+	r := [32]byte{'a'}
+	if s.HasInitSyncBlock(r) {
+		t.Error("Should not have block")
+	}
+	s.saveInitSyncBlock(r, testutil.NewBeaconBlock())
+	if !s.HasInitSyncBlock(r) {
+		t.Error("Should have block")
 	}
 }

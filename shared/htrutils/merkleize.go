@@ -83,7 +83,7 @@ func Merkleize(hasher Hasher, count uint64, limit uint64, leaf func(i uint64) []
 	}
 	depth := GetDepth(count)
 	limitDepth := GetDepth(limit)
-	tmp := make([][32]byte, limitDepth+1, limitDepth+1)
+	tmp := make([][32]byte, limitDepth+1)
 
 	j := uint8(0)
 	hArr := [32]byte{}
@@ -113,13 +113,13 @@ func Merkleize(hasher Hasher, count uint64, limit uint64, leaf func(i uint64) []
 
 	// merge in leaf by leaf.
 	for i := uint64(0); i < count; i++ {
-		copy(h[:], leaf(i))
+		copy(h, leaf(i))
 		merge(i)
 	}
 
 	// complement with 0 if empty, or if not the right power of 2
 	if (uint64(1) << depth) != count {
-		copy(h[:], trieutil.ZeroHashes[0][:])
+		copy(h, trieutil.ZeroHashes[0][:])
 		merge(count)
 	}
 
@@ -148,7 +148,7 @@ func ConstructProof(hasher Hasher, count uint64, limit uint64, leaf func(i uint6
 	limitDepth := GetDepth(limit)
 	branch = append(branch, trieutil.ZeroHashes[:limitDepth]...)
 
-	tmp := make([][32]byte, limitDepth+1, limitDepth+1)
+	tmp := make([][32]byte, limitDepth+1)
 
 	j := uint8(0)
 	hArr := [32]byte{}
@@ -185,13 +185,13 @@ func ConstructProof(hasher Hasher, count uint64, limit uint64, leaf func(i uint6
 
 	// merge in leaf by leaf.
 	for i := uint64(0); i < count; i++ {
-		copy(h[:], leaf(i))
+		copy(h, leaf(i))
 		merge(i)
 	}
 
 	// complement with 0 if empty, or if not the right power of 2
 	if (uint64(1) << depth) != count {
-		copy(h[:], trieutil.ZeroHashes[0][:])
+		copy(h, trieutil.ZeroHashes[0][:])
 		merge(count)
 	}
 

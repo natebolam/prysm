@@ -21,6 +21,8 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func setupValidAttesterSlashing(t *testing.T) (*ethpb.AttesterSlashing, *stateTrie.BeaconState) {
@@ -29,45 +31,41 @@ func setupValidAttesterSlashing(t *testing.T) (*ethpb.AttesterSlashing, *stateTr
 	for _, vv := range vals {
 		vv.WithdrawableEpoch = 1 * params.BeaconConfig().SlotsPerEpoch
 	}
-	if err := state.SetValidators(vals); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, state.SetValidators(vals))
 
 	att1 := &ethpb.IndexedAttestation{
 		Data: &ethpb.AttestationData{
-			Source: &ethpb.Checkpoint{Epoch: 1},
-			Target: &ethpb.Checkpoint{Epoch: 0},
+			Source:          &ethpb.Checkpoint{Epoch: 1, Root: make([]byte, 32)},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+			BeaconBlockRoot: make([]byte, 32),
 		},
 		AttestingIndices: []uint64{0, 1},
+		Signature:        make([]byte, 96),
 	}
 	domain, err := helpers.Domain(state.Fork(), 0, params.BeaconConfig().DomainBeaconAttester, state.GenesisValidatorRoot())
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	hashTreeRoot, err := helpers.ComputeSigningRoot(att1.Data, domain)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	sig0 := privKeys[0].Sign(hashTreeRoot[:])
 	sig1 := privKeys[1].Sign(hashTreeRoot[:])
 	aggregateSig := bls.AggregateSignatures([]bls.Signature{sig0, sig1})
-	att1.Signature = aggregateSig.Marshal()[:]
+	att1.Signature = aggregateSig.Marshal()
 
 	att2 := &ethpb.IndexedAttestation{
 		Data: &ethpb.AttestationData{
-			Source: &ethpb.Checkpoint{Epoch: 0},
-			Target: &ethpb.Checkpoint{Epoch: 0},
+			Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+			Target:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
+			BeaconBlockRoot: make([]byte, 32),
 		},
 		AttestingIndices: []uint64{0, 1},
+		Signature:        make([]byte, 96),
 	}
 	hashTreeRoot, err = helpers.ComputeSigningRoot(att2.Data, domain)
-	if err != nil {
-		t.Error(err)
-	}
+	assert.NoError(t, err)
 	sig0 = privKeys[0].Sign(hashTreeRoot[:])
 	sig1 = privKeys[1].Sign(hashTreeRoot[:])
 	aggregateSig = bls.AggregateSignatures([]bls.Signature{sig0, sig1})
-	att2.Signature = aggregateSig.Marshal()[:]
+	att2.Signature = aggregateSig.Marshal()
 
 	slashing := &ethpb.AttesterSlashing{
 		Attestation_1: att1,
@@ -75,14 +73,11 @@ func setupValidAttesterSlashing(t *testing.T) (*ethpb.AttesterSlashing, *stateTr
 	}
 
 	currentSlot := 2 * params.BeaconConfig().SlotsPerEpoch
-	if err := state.SetSlot(currentSlot); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, state.SetSlot(currentSlot))
 
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		t.Fatal(err)
-	}
+	_, err = rand.Read(b)
+	require.NoError(t, err)
 
 	return slashing, state
 }
@@ -94,9 +89,7 @@ func TestValidateAttesterSlashing_ValidSlashing(t *testing.T) {
 	slashing, s := setupValidAttesterSlashing(t)
 
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:                       p,
 		chain:                     &mock.ChainService{State: s},
@@ -105,9 +98,8 @@ func TestValidateAttesterSlashing_ValidSlashing(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, slashing); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, slashing)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -119,13 +111,8 @@ func TestValidateAttesterSlashing_ValidSlashing(t *testing.T) {
 	}
 	valid := r.validateAttesterSlashing(ctx, "foobar", msg) == pubsub.ValidationAccept
 
-	if !valid {
-		t.Error("Failed Validation")
-	}
-
-	if msg.ValidatorData == nil {
-		t.Error("Decoded message was not set on the message validator data")
-	}
+	assert.Equal(t, true, valid, "Failed Validation")
+	assert.NotNil(t, msg.ValidatorData, "Decoded message was not set on the message validator data")
 }
 
 func TestValidateAttesterSlashing_ContextTimeout(t *testing.T) {
@@ -138,9 +125,7 @@ func TestValidateAttesterSlashing_ContextTimeout(t *testing.T) {
 	defer cancel()
 
 	c, err := lru.New(10)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	r := &Service{
 		p2p:                       p,
 		chain:                     &mock.ChainService{State: state},
@@ -149,9 +134,8 @@ func TestValidateAttesterSlashing_ContextTimeout(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, slashing); err != nil {
-		t.Fatal(err)
-	}
+	_, err = p.Encoding().EncodeGossip(buf, slashing)
+	require.NoError(t, err)
 
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
@@ -162,10 +146,7 @@ func TestValidateAttesterSlashing_ContextTimeout(t *testing.T) {
 		},
 	}
 	valid := r.validateAttesterSlashing(ctx, "", msg) == pubsub.ValidationAccept
-
-	if valid {
-		t.Error("slashing from the far distant future should have timed out and returned false")
-	}
+	assert.Equal(t, false, valid, "slashing from the far distant future should have timed out and returned false")
 }
 
 func TestValidateAttesterSlashing_Syncing(t *testing.T) {
@@ -181,9 +162,8 @@ func TestValidateAttesterSlashing_Syncing(t *testing.T) {
 	}
 
 	buf := new(bytes.Buffer)
-	if _, err := p.Encoding().EncodeGossip(buf, slashing); err != nil {
-		t.Fatal(err)
-	}
+	_, err := p.Encoding().EncodeGossip(buf, slashing)
+	require.NoError(t, err)
 	msg := &pubsub.Message{
 		Message: &pubsubpb.Message{
 			Data: buf.Bytes(),
@@ -193,7 +173,5 @@ func TestValidateAttesterSlashing_Syncing(t *testing.T) {
 		},
 	}
 	valid := r.validateAttesterSlashing(ctx, "", msg) == pubsub.ValidationAccept
-	if valid {
-		t.Error("Passed validation")
-	}
+	assert.Equal(t, false, valid, "Passed validation")
 }

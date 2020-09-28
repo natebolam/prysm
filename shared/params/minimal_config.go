@@ -58,6 +58,7 @@ func MinimalSpecConfig() *BeaconChainConfig {
 	minimalConfig.ProposerRewardQuotient = 8
 	minimalConfig.InactivityPenaltyQuotient = 1 << 24
 	minimalConfig.MinSlashingPenaltyQuotient = 32
+	minimalConfig.ProportionalSlashingMultiplier = 3
 
 	// Max operations per block
 	minimalConfig.MaxProposerSlashings = 16
@@ -76,5 +77,6 @@ func MinimalSpecConfig() *BeaconChainConfig {
 
 	minimalConfig.DepositContractTreeDepth = 32
 	minimalConfig.FarFutureEpoch = 1<<64 - 1
+
 	return minimalConfig
 }

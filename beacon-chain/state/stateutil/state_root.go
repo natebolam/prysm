@@ -20,6 +20,9 @@ const cacheSize = 100000
 var nocachedHasher *stateRootHasher
 var cachedHasher *stateRootHasher
 
+// There are 21 fields in the beacon state.
+const fieldCount = 21
+
 func init() {
 	rootsCache, err := ristretto.NewCache(&ristretto.Config{
 		NumCounters: cacheSize, // number of keys to track frequency of (1M).
@@ -39,18 +42,6 @@ type stateRootHasher struct {
 	rootsCache *ristretto.Cache
 }
 
-// HashTreeRootState provides a fully-customized version of ssz.HashTreeRoot
-// for the BeaconState type of the official Ethereum Serenity specification.
-// The reason for this particular function is to optimize for speed and memory allocation
-// at the expense of complete specificity (that is, this function can only be used
-// on the Prysm BeaconState data structure).
-func HashTreeRootState(state *pb.BeaconState) ([32]byte, error) {
-	if featureconfig.Get().EnableSSZCache {
-		return cachedHasher.hashTreeRootState(state)
-	}
-	return nocachedHasher.hashTreeRootState(state)
-}
-
 // ComputeFieldRoots returns the hash tree root computations of every field in
 // the beacon state as a list of 32 byte roots.
 func ComputeFieldRoots(state *pb.BeaconState) ([][]byte, error) {
@@ -60,30 +51,12 @@ func ComputeFieldRoots(state *pb.BeaconState) ([][]byte, error) {
 	return nocachedHasher.computeFieldRoots(state)
 }
 
-func (h *stateRootHasher) hashTreeRootState(state *pb.BeaconState) ([32]byte, error) {
-	var fieldRoots [][]byte
-	var err error
-	if featureconfig.Get().EnableSSZCache {
-		fieldRoots, err = cachedHasher.computeFieldRoots(state)
-		if err != nil {
-			return [32]byte{}, err
-		}
-	} else {
-		fieldRoots, err = nocachedHasher.computeFieldRoots(state)
-		if err != nil {
-			return [32]byte{}, err
-		}
-	}
-	return htrutils.BitwiseMerkleize(hashutil.CustomSHA256Hasher(), fieldRoots, uint64(len(fieldRoots)), uint64(len(fieldRoots)))
-}
-
 func (h *stateRootHasher) computeFieldRoots(state *pb.BeaconState) ([][]byte, error) {
 	if state == nil {
 		return nil, errors.New("nil state")
 	}
 	hasher := hashutil.CustomSHA256Hasher()
-	// There are 21 fields in the beacon state.
-	fieldRoots := make([][]byte, 21)
+	fieldRoots := make([][]byte, fieldCount)
 
 	// Genesis time root.
 	genesisRoot := htrutils.Uint64Root(state.GenesisTime)

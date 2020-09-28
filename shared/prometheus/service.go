@@ -14,6 +14,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prysmaticlabs/prysm/shared"
+	"github.com/prysmaticlabs/prysm/shared/logutil"
 	"github.com/sirupsen/logrus"
 )
 
@@ -33,15 +34,16 @@ type Handler struct {
 	Handler func(http.ResponseWriter, *http.Request)
 }
 
-// NewPrometheusService sets up a new instance for a given address host:port.
+// NewService sets up a new instance for a given address host:port.
 // An empty host will match with any IP so an address like ":2121" is perfectly acceptable.
-func NewPrometheusService(addr string, svcRegistry *shared.ServiceRegistry, additionalHandlers ...Handler) *Service {
+func NewService(addr string, svcRegistry *shared.ServiceRegistry, additionalHandlers ...Handler) *Service {
 	s := &Service{svcRegistry: svcRegistry}
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", s.healthzHandler)
 	mux.HandleFunc("/goroutinez", s.goroutinezHandler)
+	mux.HandleFunc("/logs", logutil.NewLogStreamServer().Handler)
 
 	// Register additional handlers.
 	for _, h := range additionalHandlers {
@@ -61,19 +63,29 @@ func (s *Service) healthzHandler(w http.ResponseWriter, r *http.Request) {
 		Status bool   `json:"status"`
 		Err    string `json:"error"`
 	}
+	var hasError bool
 	var statuses []serviceStatus
 	for k, v := range s.svcRegistry.Statuses() {
 		s := serviceStatus{
-			Name:   fmt.Sprintf("%s", k),
+			Name:   k.String(),
 			Status: true,
 		}
 		if v != nil {
 			s.Status = false
 			s.Err = v.Error()
+			if s.Err != "" {
+				hasError = true
+			}
 		}
 		statuses = append(statuses, s)
 	}
 	response.Data = statuses
+
+	if hasError {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
 
 	// Handle plain text content.
 	if contentType := negotiateContentType(r); contentType == contentTypePlainText {

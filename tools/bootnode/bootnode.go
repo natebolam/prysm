@@ -34,25 +34,27 @@ import (
 	"github.com/prysmaticlabs/go-bitfield"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/iputils"
 	"github.com/prysmaticlabs/prysm/shared/logutil"
+	_ "github.com/prysmaticlabs/prysm/shared/maxprocs"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/runutil"
 	"github.com/prysmaticlabs/prysm/shared/version"
 	"github.com/sirupsen/logrus"
-	_ "go.uber.org/automaxprocs"
 )
 
 var (
-	debug            = flag.Bool("debug", false, "Enable debug logging")
-	logFileName      = flag.String("log-file", "", "Specify log filename, relative or absolute")
-	privateKey       = flag.String("private", "", "Private key to use for peer ID")
-	discv5port       = flag.Int("discv5-port", 4000, "Port to listen for discv5 connections")
-	metricsPort      = flag.Int("metrics-port", 5000, "Port to listen for connections")
-	externalIP       = flag.String("external-ip", "", "External IP for the bootnode")
-	disableKad       = flag.Bool("disable-kad", false, "Disables the bootnode from running kademlia dht")
-	log              = logrus.WithField("prefix", "bootnode")
-	discv5PeersCount = promauto.NewGauge(prometheus.GaugeOpts{
+	debug                = flag.Bool("debug", false, "Enable debug logging")
+	logFileName          = flag.String("log-file", "", "Specify log filename, relative or absolute")
+	privateKey           = flag.String("private", "", "Private key to use for peer ID")
+	discv5port           = flag.Int("discv5-port", 4000, "Port to listen for discv5 connections")
+	metricsPort          = flag.Int("metrics-port", 5000, "Port to listen for connections")
+	externalIP           = flag.String("external-ip", "", "External IP for the bootnode")
+	forkVersion          = flag.String("fork-version", "", "Fork Version that the bootnode uses")
+	genesisValidatorRoot = flag.String("genesis-root", "", "Genesis Validator Root the beacon node uses")
+	log                  = logrus.WithField("prefix", "bootnode")
+	discv5PeersCount     = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "bootstrap_node_discv5_peers",
 		Help: "The current number of discv5 peers of the bootstrap node",
 	})
@@ -63,6 +65,9 @@ type handler struct {
 }
 
 func main() {
+	// Using Medalla as the default configuration.
+	params.UseMedallaConfig()
+
 	flag.Parse()
 
 	if *logFileName != "" {
@@ -95,10 +100,6 @@ func main() {
 
 	node := listener.Self()
 	log.Infof("Running bootnode: %s", node.String())
-
-	if !*disableKad {
-		log.Warn("--disable-kad is now deprecated, kademlia has been removed from the bootnode")
-	}
 
 	handler := &handler{
 		listener: listener,
@@ -172,14 +173,35 @@ func createLocalNode(privKey *ecdsa.PrivateKey, ipAddr net.IP, port int) (*enode
 	if *externalIP == "" {
 		external = ipAddr
 	}
-	digest, err := helpers.ComputeForkDigest(params.BeaconConfig().GenesisForkVersion, params.BeaconConfig().ZeroHash[:])
+	fVersion := params.BeaconConfig().GenesisForkVersion
+	if *forkVersion != "" {
+		fVersion, err = hex.DecodeString(*forkVersion)
+		if err != nil {
+			return nil, errors.Wrap(err, "Could not retrieve fork version")
+		}
+		if len(fVersion) != 4 {
+			return nil, errors.Errorf("Invalid fork version size expected %d but got %d", 4, len(fVersion))
+		}
+	}
+	genRoot := params.BeaconConfig().ZeroHash
+	if *genesisValidatorRoot != "" {
+		retRoot, err := hex.DecodeString(*genesisValidatorRoot)
+		if err != nil {
+			return nil, errors.Wrap(err, "Could not retrieve genesis validator root")
+		}
+		if len(retRoot) != 32 {
+			return nil, errors.Errorf("Invalid root size, expected 32 but got %d", len(retRoot))
+		}
+		genRoot = bytesutil.ToBytes32(retRoot)
+	}
+	digest, err := helpers.ComputeForkDigest(fVersion, genRoot[:])
 	if err != nil {
 		return nil, errors.Wrap(err, "Could not compute fork digest")
 	}
 
 	forkID := &pb.ENRForkID{
 		CurrentForkDigest: digest[:],
-		NextForkVersion:   params.BeaconConfig().GenesisForkVersion,
+		NextForkVersion:   fVersion,
 		NextForkEpoch:     params.BeaconConfig().FarFutureEpoch,
 	}
 	forkEntry, err := forkID.MarshalSSZ()

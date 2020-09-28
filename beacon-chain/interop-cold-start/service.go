@@ -16,7 +16,6 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
 	"github.com/prysmaticlabs/prysm/beacon-chain/powchain"
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
-	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateutil"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared"
 	"github.com/prysmaticlabs/prysm/shared/interop"
@@ -35,7 +34,6 @@ type Service struct {
 	genesisTime        uint64
 	numValidators      uint64
 	beaconDB           db.HeadAccessDatabase
-	powchain           powchain.Service
 	depositCache       *depositcache.DepositCache
 	genesisPath        string
 	chainStartDeposits []*ethpb.Deposit
@@ -50,10 +48,10 @@ type Config struct {
 	GenesisPath   string
 }
 
-// NewColdStartService is an interoperability testing service to inject a deterministically generated genesis state
+// NewService is an interoperability testing service to inject a deterministically generated genesis state
 // into the beacon chain database and running services at start up. This service should not be used in production
 // as it does not have any value other than ease of use for testing purposes.
-func NewColdStartService(ctx context.Context, cfg *Config) *Service {
+func NewService(ctx context.Context, cfg *Config) *Service {
 	log.Warn("Saving generated genesis state in database for interop testing")
 	ctx, cancel := context.WithCancel(ctx)
 
@@ -123,7 +121,7 @@ func (s *Service) Status() error {
 }
 
 // AllDeposits mocks out the deposit cache functionality for interop.
-func (s *Service) AllDeposits(ctx context.Context, beforeBlk *big.Int) []*ethpb.Deposit {
+func (s *Service) AllDeposits(ctx context.Context, untilBlk *big.Int) []*ethpb.Deposit {
 	return []*ethpb.Deposit{}
 }
 
@@ -149,12 +147,22 @@ func (s *Service) ClearPreGenesisData() {
 
 // DepositByPubkey mocks out the deposit cache functionality for interop.
 func (s *Service) DepositByPubkey(ctx context.Context, pubKey []byte) (*ethpb.Deposit, *big.Int) {
-	return &ethpb.Deposit{}, big.NewInt(1)
+	return &ethpb.Deposit{}, nil
 }
 
 // DepositsNumberAndRootAtHeight mocks out the deposit cache functionality for interop.
 func (s *Service) DepositsNumberAndRootAtHeight(ctx context.Context, blockHeight *big.Int) (uint64, [32]byte) {
 	return 0, [32]byte{}
+}
+
+// FinalizedDeposits mocks out the deposit cache functionality for interop.
+func (s *Service) FinalizedDeposits(ctx context.Context) *depositcache.FinalizedDeposits {
+	return nil
+}
+
+// NonFinalizedDeposits mocks out the deposit cache functionality for interop.
+func (s *Service) NonFinalizedDeposits(ctx context.Context, untilBlk *big.Int) []*ethpb.Deposit {
+	return []*ethpb.Deposit{}
 }
 
 func (s *Service) saveGenesisState(ctx context.Context, genesisState *stateTrie.BeaconState) error {
@@ -164,7 +172,7 @@ func (s *Service) saveGenesisState(ctx context.Context, genesisState *stateTrie.
 		return err
 	}
 	genesisBlk := blocks.NewGenesisBlock(stateRoot[:])
-	genesisBlkRoot, err := stateutil.BlockRoot(genesisBlk.Block)
+	genesisBlkRoot, err := genesisBlk.Block.HashTreeRoot()
 	if err != nil {
 		return errors.Wrap(err, "could not get genesis block root")
 	}

@@ -15,7 +15,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 	"github.com/prysmaticlabs/prysm/shared/mputil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/prysmaticlabs/prysm/shared/trieutil"
 )
 
@@ -49,7 +49,7 @@ func GenerateGenesisState(genesisTime, numValidators uint64) (*pb.BeaconState, [
 	}
 	root := trie.Root()
 	if genesisTime == 0 {
-		genesisTime = uint64(roughtime.Now().Unix())
+		genesisTime = uint64(timeutils.Now().Unix())
 	}
 	beaconState, err := state.GenesisBeaconState(deposits, genesisTime, &ethpb.Eth1Data{
 		DepositRoot:  root[:],
@@ -131,7 +131,7 @@ func depositDataFromKeys(privKeys []bls.SecretKey, pubKeys []bls.PublicKey) ([]*
 		if err != nil {
 			return nil, nil, errors.Wrapf(err, "could not create deposit data for key: %#x", privKeys[i].Marshal())
 		}
-		hash, err := ssz.HashTreeRoot(data)
+		hash, err := data.HashTreeRoot()
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "could not hash tree root deposit data item")
 		}
@@ -156,7 +156,7 @@ func createDepositData(privKey bls.SecretKey, pubKey bls.PublicKey) (*ethpb.Depo
 	if err != nil {
 		return nil, err
 	}
-	root, err := ssz.HashTreeRoot(&pb.SigningData{ObjectRoot: sr[:], Domain: domain})
+	root, err := (&pb.SigningData{ObjectRoot: sr[:], Domain: domain}).HashTreeRoot()
 	if err != nil {
 		return nil, err
 	}

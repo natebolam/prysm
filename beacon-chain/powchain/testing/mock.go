@@ -22,22 +22,34 @@ import (
 
 // POWChain defines a properly functioning mock for the powchain service.
 type POWChain struct {
-	ChainFeed           *event.Feed
-	LatestBlockNumber   *big.Int
-	HashesByHeight      map[int][]byte
-	TimesByHeight       map[int]uint64
-	BlockNumberByHeight map[uint64]*big.Int
-	Eth1Data            *ethpb.Eth1Data
-	GenesisEth1Block    *big.Int
+	ChainFeed         *event.Feed
+	LatestBlockNumber *big.Int
+	HashesByHeight    map[int][]byte
+	TimesByHeight     map[int]uint64
+	BlockNumberByTime map[uint64]*big.Int
+	Eth1Data          *ethpb.Eth1Data
+	GenesisEth1Block  *big.Int
+}
+
+// GenesisTime represents a static past date - JAN 01 2000.
+var GenesisTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+
+// NewPOWChain creates a new mock chain with empty block info.
+func NewPOWChain() *POWChain {
+	return &POWChain{
+		HashesByHeight:    make(map[int][]byte),
+		TimesByHeight:     make(map[int]uint64),
+		BlockNumberByTime: make(map[uint64]*big.Int),
+	}
 }
 
 // Eth2GenesisPowchainInfo --
 func (m *POWChain) Eth2GenesisPowchainInfo() (uint64, *big.Int) {
 	blk := m.GenesisEth1Block
 	if blk == nil {
-		blk = big.NewInt(0)
+		blk = big.NewInt(GenesisTime)
 	}
-	return uint64(time.Unix(0, 0).Unix()), blk
+	return uint64(GenesisTime), blk
 }
 
 // DepositTrie --
@@ -48,7 +60,7 @@ func (m *POWChain) DepositTrie() *trieutil.SparseMerkleTrie {
 // BlockExists --
 func (m *POWChain) BlockExists(_ context.Context, hash common.Hash) (bool, *big.Int, error) {
 	// Reverse the map of heights by hash.
-	heightsByHash := make(map[[32]byte]int)
+	heightsByHash := make(map[[32]byte]int, len(m.HashesByHeight))
 	for k, v := range m.HashesByHeight {
 		h := bytesutil.ToBytes32(v)
 		heightsByHash[h] = k
@@ -78,7 +90,15 @@ func (m *POWChain) BlockTimeByHeight(_ context.Context, height *big.Int) (uint64
 
 // BlockNumberByTimestamp --
 func (m *POWChain) BlockNumberByTimestamp(_ context.Context, time uint64) (*big.Int, error) {
-	return m.BlockNumberByHeight[time], nil
+	var chosenTime uint64
+	var chosenNumber *big.Int
+	for t, num := range m.BlockNumberByTime {
+		if t > chosenTime && t <= time {
+			chosenNumber = num
+			chosenTime = t
+		}
+	}
+	return chosenNumber, nil
 }
 
 // DepositRoot --
@@ -131,4 +151,12 @@ func (r *RPCClient) BatchCall(b []rpc.BatchElem) error {
 		e.Result.(*gethTypes.Header).Number = num
 	}
 	return nil
+}
+
+// InsertBlock adds provided block info into the chain.
+func (m *POWChain) InsertBlock(height int, time uint64, hash []byte) *POWChain {
+	m.HashesByHeight[height] = hash
+	m.TimesByHeight[height] = time
+	m.BlockNumberByTime[time] = big.NewInt(int64(height))
+	return m
 }

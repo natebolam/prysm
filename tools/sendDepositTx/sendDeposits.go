@@ -48,6 +48,8 @@ func main() {
 	customFormatter.FullTimestamp = true
 	logrus.SetFormatter(customFormatter)
 
+	params.UseMedallaConfig()
+
 	app := cli.App{}
 	app.Name = "sendDepositTx"
 	app.Usage = "this is a util to send deposit transactions"
@@ -175,7 +177,7 @@ func main() {
 			validatorKeys[hex.EncodeToString(validatorKey.PublicKey.Marshal())] = validatorKey
 		} else {
 			// Load from keystore
-			store := prysmKeyStore.NewKeystore(prysmKeystorePath)
+			store := prysmKeyStore.New(prysmKeystorePath)
 			rawPassword := loadTextFromFile(passwordFile)
 			prefix := params.BeaconConfig().ValidatorPrivkeyFileName
 			validatorKeys, err = store.GetKeys(prysmKeystorePath, prefix, rawPassword, false /* warnOnFail */)

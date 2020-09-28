@@ -1,14 +1,20 @@
 package blocks_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func FakeDeposits(n uint64) []*ethpb.Eth1Data {
@@ -16,7 +22,7 @@ func FakeDeposits(n uint64) []*ethpb.Eth1Data {
 	for i := uint64(0); i < n; i++ {
 		deposits[i] = &ethpb.Eth1Data{
 			DepositCount: 1,
-			DepositRoot:  []byte("root"),
+			DepositRoot:  bytesutil.PadTo([]byte("root"), 32),
 		}
 	}
 	return deposits
@@ -33,7 +39,7 @@ func TestEth1DataHasEnoughSupport(t *testing.T) {
 			stateVotes: FakeDeposits(4 * params.BeaconConfig().SlotsPerEpoch),
 			data: &ethpb.Eth1Data{
 				DepositCount: 1,
-				DepositRoot:  []byte("root"),
+				DepositRoot:  bytesutil.PadTo([]byte("root"), 32),
 			},
 			hasSupport:         true,
 			votingPeriodLength: 7,
@@ -41,7 +47,7 @@ func TestEth1DataHasEnoughSupport(t *testing.T) {
 			stateVotes: FakeDeposits(4 * params.BeaconConfig().SlotsPerEpoch),
 			data: &ethpb.Eth1Data{
 				DepositCount: 1,
-				DepositRoot:  []byte("root"),
+				DepositRoot:  bytesutil.PadTo([]byte("root"), 32),
 			},
 			hasSupport:         false,
 			votingPeriodLength: 8,
@@ -49,7 +55,7 @@ func TestEth1DataHasEnoughSupport(t *testing.T) {
 			stateVotes: FakeDeposits(4 * params.BeaconConfig().SlotsPerEpoch),
 			data: &ethpb.Eth1Data{
 				DepositCount: 1,
-				DepositRoot:  []byte("root"),
+				DepositRoot:  bytesutil.PadTo([]byte("root"), 32),
 			},
 			hasSupport:         false,
 			votingPeriodLength: 10,
@@ -66,13 +72,9 @@ func TestEth1DataHasEnoughSupport(t *testing.T) {
 			s, err := beaconstate.InitializeFromProto(&pb.BeaconState{
 				Eth1DataVotes: tt.stateVotes,
 			})
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			result, err := blocks.Eth1DataHasEnoughSupport(s, tt.data)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 
 			if result != tt.hasSupport {
 				t.Errorf(
@@ -83,5 +85,110 @@ func TestEth1DataHasEnoughSupport(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestAreEth1DataEqual(t *testing.T) {
+	type args struct {
+		a *ethpb.Eth1Data
+		b *ethpb.Eth1Data
+	}
+	tests := []struct {
+		name string
+		args args
+		want bool
+	}{
+		{
+			name: "true when both are nil",
+			args: args{
+				a: nil,
+				b: nil,
+			},
+			want: true,
+		},
+		{
+			name: "false when only one is nil",
+			args: args{
+				a: nil,
+				b: &ethpb.Eth1Data{
+					DepositRoot:  make([]byte, 32),
+					DepositCount: 0,
+					BlockHash:    make([]byte, 32),
+				},
+			},
+			want: false,
+		},
+		{
+			name: "true when real equality",
+			args: args{
+				a: &ethpb.Eth1Data{
+					DepositRoot:  make([]byte, 32),
+					DepositCount: 0,
+					BlockHash:    make([]byte, 32),
+				},
+				b: &ethpb.Eth1Data{
+					DepositRoot:  make([]byte, 32),
+					DepositCount: 0,
+					BlockHash:    make([]byte, 32),
+				},
+			},
+			want: true,
+		},
+		{
+			name: "false is field value differs",
+			args: args{
+				a: &ethpb.Eth1Data{
+					DepositRoot:  make([]byte, 32),
+					DepositCount: 0,
+					BlockHash:    make([]byte, 32),
+				},
+				b: &ethpb.Eth1Data{
+					DepositRoot:  make([]byte, 32),
+					DepositCount: 64,
+					BlockHash:    make([]byte, 32),
+				},
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, blocks.AreEth1DataEqual(tt.args.a, tt.args.b))
+		})
+	}
+}
+
+func TestProcessEth1Data_SetsCorrectly(t *testing.T) {
+	beaconState, err := beaconstate.InitializeFromProto(&pb.BeaconState{
+		Eth1DataVotes: []*ethpb.Eth1Data{},
+	})
+	require.NoError(t, err)
+
+	b := testutil.NewBeaconBlock()
+	b.Block = &ethpb.BeaconBlock{
+		Body: &ethpb.BeaconBlockBody{
+			Eth1Data: &ethpb.Eth1Data{
+				DepositRoot: []byte{2},
+				BlockHash:   []byte{3},
+			},
+		},
+	}
+
+	period := params.BeaconConfig().EpochsPerEth1VotingPeriod * params.BeaconConfig().SlotsPerEpoch
+	for i := uint64(0); i < period; i++ {
+		beaconState, err = blocks.ProcessEth1DataInBlock(context.Background(), beaconState, b)
+		require.NoError(t, err)
+	}
+
+	newETH1DataVotes := beaconState.Eth1DataVotes()
+	if len(newETH1DataVotes) <= 1 {
+		t.Error("Expected new ETH1 data votes to have length > 1")
+	}
+	if !proto.Equal(beaconState.Eth1Data(), beaconstate.CopyETH1Data(b.Block.Body.Eth1Data)) {
+		t.Errorf(
+			"Expected latest eth1 data to have been set to %v, received %v",
+			b.Block.Body.Eth1Data,
+			beaconState.Eth1Data(),
+		)
 	}
 }

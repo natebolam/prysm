@@ -3,7 +3,7 @@ package initialsync
 import (
 	"context"
 	"fmt"
-	"reflect"
+	"math"
 	"sort"
 	"sync"
 	"testing"
@@ -19,12 +19,16 @@ import (
 	dbtest "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	p2pm "github.com/prysmaticlabs/prysm/beacon-chain/p2p"
+	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/peers"
 	p2pt "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
-	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	beaconsync "github.com/prysmaticlabs/prysm/beacon-chain/sync"
 	p2ppb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/sirupsen/logrus"
 )
 
@@ -36,16 +40,15 @@ func TestBlocksFetcher_InitStartStop(t *testing.T) {
 	fetcher := newBlocksFetcher(
 		ctx,
 		&blocksFetcherConfig{
-			headFetcher: mc,
-			p2p:         p2p,
+			headFetcher:         mc,
+			finalizationFetcher: mc,
+			p2p:                 p2p,
 		},
 	)
 
 	t.Run("check for leaked goroutines", func(t *testing.T) {
 		err := fetcher.start()
-		if err != nil {
-			t.Error(err)
-		}
+		require.NoError(t, err)
 		fetcher.stop() // should block up until all resources are reclaimed
 		select {
 		case <-fetcher.requestResponses():
@@ -55,22 +58,18 @@ func TestBlocksFetcher_InitStartStop(t *testing.T) {
 	})
 
 	t.Run("re-starting of stopped fetcher", func(t *testing.T) {
-		if err := fetcher.start(); err == nil {
-			t.Errorf("expected error not returned: %v", errFetcherCtxIsDone)
-		}
+		assert.ErrorContains(t, errFetcherCtxIsDone.Error(), fetcher.start())
 	})
 
 	t.Run("multiple stopping attempts", func(t *testing.T) {
 		fetcher := newBlocksFetcher(
 			context.Background(),
 			&blocksFetcherConfig{
-				headFetcher: mc,
-				p2p:         p2p,
+				headFetcher:         mc,
+				finalizationFetcher: mc,
+				p2p:                 p2p,
 			})
-		if err := fetcher.start(); err != nil {
-			t.Error(err)
-		}
-
+		require.NoError(t, fetcher.start())
 		fetcher.stop()
 		fetcher.stop()
 	})
@@ -80,13 +79,11 @@ func TestBlocksFetcher_InitStartStop(t *testing.T) {
 		fetcher := newBlocksFetcher(
 			ctx,
 			&blocksFetcherConfig{
-				headFetcher: mc,
-				p2p:         p2p,
+				headFetcher:         mc,
+				finalizationFetcher: mc,
+				p2p:                 p2p,
 			})
-		if err := fetcher.start(); err != nil {
-			t.Error(err)
-		}
-
+		require.NoError(t, fetcher.start())
 		cancel()
 		fetcher.stop()
 	})
@@ -260,36 +257,27 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 			genesisRoot := cache.rootCache[0]
 			cache.RUnlock()
 
-			err := beaconDB.SaveBlock(context.Background(), &eth.SignedBeaconBlock{
-				Block: &eth.BeaconBlock{
-					Slot: 0,
-				}})
-			if err != nil {
-				t.Fatal(err)
-			}
+			err := beaconDB.SaveBlock(context.Background(), testutil.NewBeaconBlock())
+			require.NoError(t, err)
 
-			st, err := stateTrie.InitializeFromProto(&p2ppb.BeaconState{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			st := testutil.NewBeaconState()
+
 			mc := &mock.ChainService{
 				State: st,
 				Root:  genesisRoot[:],
 				DB:    beaconDB,
+				FinalizedCheckPoint: &eth.Checkpoint{
+					Epoch: 0,
+				},
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())
-			fetcher := newBlocksFetcher(
-				ctx,
-				&blocksFetcherConfig{
-					headFetcher: mc,
-					p2p:         p,
-				})
-
-			err = fetcher.start()
-			if err != nil {
-				t.Error(err)
-			}
+			fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
+				headFetcher:         mc,
+				finalizationFetcher: mc,
+				p2p:                 p,
+			})
+			require.NoError(t, fetcher.start())
 
 			var wg sync.WaitGroup
 			wg.Add(len(tt.requests)) // how many block requests we are going to make
@@ -330,16 +318,12 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 			maxExpectedBlocks := uint64(0)
 			for _, requestParams := range tt.requests {
 				err = fetcher.scheduleRequest(context.Background(), requestParams.start, requestParams.count)
-				if err != nil {
-					t.Error(err)
-				}
+				assert.NoError(t, err)
 				maxExpectedBlocks += requestParams.count
 			}
 
 			blocks, err := processFetchedBlocks()
-			if err != nil {
-				t.Error(err)
-			}
+			assert.NoError(t, err)
 
 			sort.Slice(blocks, func(i, j int) bool {
 				return blocks[i].Block.Slot < blocks[j].Block.Slot
@@ -358,9 +342,7 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 			if len(blocks) > int(maxExpectedBlocks) {
 				t.Errorf("Too many blocks returned. Wanted %d got %d", maxExpectedBlocks, len(blocks))
 			}
-			if len(blocks) != len(tt.expectedBlockSlots) {
-				t.Errorf("Processes wrong number of blocks. Wanted %d got %d", len(tt.expectedBlockSlots), len(blocks))
-			}
+			assert.Equal(t, len(tt.expectedBlockSlots), len(blocks), "Processes wrong number of blocks")
 			var receivedBlockSlots []uint64
 			for _, blk := range blocks {
 				receivedBlockSlots = append(receivedBlockSlots, blk.Block.Slot)
@@ -383,9 +365,7 @@ func TestBlocksFetcher_scheduleRequest(t *testing.T) {
 			p2p:         nil,
 		})
 		cancel()
-		if err := fetcher.scheduleRequest(ctx, 1, blockBatchLimit); err == nil {
-			t.Errorf("expected error: %v", errFetcherCtxIsDone)
-		}
+		assert.ErrorContains(t, "context canceled", fetcher.scheduleRequest(ctx, 1, blockBatchLimit))
 	})
 }
 func TestBlocksFetcher_handleRequest(t *testing.T) {
@@ -414,23 +394,23 @@ func TestBlocksFetcher_handleRequest(t *testing.T) {
 	t.Run("context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
-			headFetcher: mc,
-			p2p:         p2p,
+			headFetcher:         mc,
+			finalizationFetcher: mc,
+			p2p:                 p2p,
 		})
 
 		cancel()
 		response := fetcher.handleRequest(ctx, 1, blockBatchLimit)
-		if response.err == nil {
-			t.Errorf("expected error: %v", errFetcherCtxIsDone)
-		}
+		assert.ErrorContains(t, "context canceled", response.err)
 	})
 
 	t.Run("receive blocks", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
-			headFetcher: mc,
-			p2p:         p2p,
+			headFetcher:         mc,
+			finalizationFetcher: mc,
+			p2p:                 p2p,
 		})
 
 		requestCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -499,31 +479,26 @@ func TestBlocksFetcher_requestBeaconBlocksByRange(t *testing.T) {
 	fetcher := newBlocksFetcher(
 		ctx,
 		&blocksFetcherConfig{
-			headFetcher: mc,
-			p2p:         p2p,
+			finalizationFetcher: mc,
+			headFetcher:         mc,
+			p2p:                 p2p,
 		})
 
-	_, peers := p2p.Peers().BestFinalized(params.BeaconConfig().MaxPeersToSync, helpers.SlotToEpoch(mc.HeadSlot()))
+	_, peerIDs := p2p.Peers().BestFinalized(params.BeaconConfig().MaxPeersToSync, helpers.SlotToEpoch(mc.HeadSlot()))
 	req := &p2ppb.BeaconBlocksByRangeRequest{
 		StartSlot: 1,
 		Step:      1,
 		Count:     blockBatchLimit,
 	}
-	blocks, err := fetcher.requestBlocks(ctx, req, peers[0])
-	if err != nil {
-		t.Errorf("error: %v", err)
-	}
-	if uint64(len(blocks)) != blockBatchLimit {
-		t.Errorf("incorrect number of blocks returned, expected: %v, got: %v", blockBatchLimit, len(blocks))
-	}
+	blocks, err := fetcher.requestBlocks(ctx, req, peerIDs[0])
+	assert.NoError(t, err)
+	assert.Equal(t, blockBatchLimit, uint64(len(blocks)), "Incorrect number of blocks returned")
 
 	// Test context cancellation.
 	ctx, cancel = context.WithCancel(context.Background())
 	cancel()
-	blocks, err = fetcher.requestBlocks(ctx, req, peers[0])
-	if err == nil || err.Error() != "context canceled" {
-		t.Errorf("expected context closed error, got: %v", err)
-	}
+	blocks, err = fetcher.requestBlocks(ctx, req, peerIDs[0])
+	assert.ErrorContains(t, "context canceled", err)
 }
 
 func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
@@ -541,7 +516,7 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 		{
 			name: "No peers provided",
 			args: args{
-				excludedPID: "abc",
+				excludedPID: "a",
 				peers:       []peer.ID{},
 			},
 			want:    "",
@@ -550,9 +525,9 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 		{
 			name: "Single peer which needs to be excluded",
 			args: args{
-				excludedPID: "abc",
+				excludedPID: "a",
 				peers: []peer.ID{
-					"abc",
+					"a",
 				},
 			},
 			want:    "",
@@ -561,7 +536,7 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 		{
 			name: "Single peer available",
 			args: args{
-				excludedPID: "abc",
+				excludedPID: "a",
 				peers: []peer.ID{
 					"cde",
 				},
@@ -572,9 +547,9 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 		{
 			name: "Two peers available, excluded first",
 			args: args{
-				excludedPID: "abc",
+				excludedPID: "a",
 				peers: []peer.ID{
-					"abc", "cde",
+					"a", "cde",
 				},
 			},
 			want:    "cde",
@@ -583,9 +558,9 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 		{
 			name: "Two peers available, excluded second",
 			args: args{
-				excludedPID: "abc",
+				excludedPID: "a",
 				peers: []peer.ID{
-					"cde", "abc",
+					"cde", "a",
 				},
 			},
 			want:    "cde",
@@ -594,9 +569,9 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 		{
 			name: "Multiple peers available",
 			args: args{
-				excludedPID: "abc",
+				excludedPID: "a",
 				peers: []peer.ID{
-					"abc", "cde", "cde", "cde",
+					"a", "cde", "cde", "cde",
 				},
 			},
 			want:    "cde",
@@ -606,12 +581,10 @@ func TestBlocksFetcher_selectFailOverPeer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := fetcher.selectFailOverPeer(tt.args.excludedPID, tt.args.peers)
-			if err != nil && err != tt.wantErr {
-				t.Errorf("selectFailOverPeer() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if got != tt.want {
-				t.Errorf("selectFailOverPeer() got = %v, want %v", got, tt.want)
+			if tt.wantErr != nil {
+				assert.ErrorContains(t, tt.wantErr.Error(), err)
+			} else {
+				assert.Equal(t, tt.want, got)
 			}
 		})
 	}
@@ -623,15 +596,15 @@ func TestBlocksFetcher_nonSkippedSlotAfter(t *testing.T) {
 		blocks = append(blocks, makeSequence(51200, 51264)...)
 		blocks = append(blocks, 55000)
 		blocks = append(blocks, makeSequence(57000, 57256)...)
-		var peers []*peerData
+		var peersData []*peerData
 		for i := 0; i < size; i++ {
-			peers = append(peers, &peerData{
+			peersData = append(peersData, &peerData{
 				blocks:         blocks,
 				finalizedEpoch: 1800,
 				headSlot:       57000,
 			})
 		}
-		return peers
+		return peersData
 	}
 	chainConfig := struct {
 		peers []*peerData
@@ -646,8 +619,9 @@ func TestBlocksFetcher_nonSkippedSlotAfter(t *testing.T) {
 	fetcher := newBlocksFetcher(
 		ctx,
 		&blocksFetcherConfig{
-			headFetcher: mc,
-			p2p:         p2p,
+			finalizationFetcher: mc,
+			headFetcher:         mc,
+			p2p:                 p2p,
 		},
 	)
 	fetcher.rateLimiter = leakybucket.NewCollector(6400, 6400, false)
@@ -670,12 +644,8 @@ func TestBlocksFetcher_nonSkippedSlotAfter(t *testing.T) {
 	for seekSlot, expectedSlot := range seekSlots {
 		t.Run(fmt.Sprintf("range: %d (%d-%d)", expectedSlot-seekSlot, seekSlot, expectedSlot), func(t *testing.T) {
 			slot, err := fetcher.nonSkippedSlotAfter(ctx, seekSlot)
-			if err != nil {
-				t.Error(err)
-			}
-			if slot != expectedSlot {
-				t.Errorf("unexpected slot, want: %v, got: %v", expectedSlot, slot)
-			}
+			assert.NoError(t, err)
+			assert.Equal(t, expectedSlot, slot, "Unexpected slot")
 		})
 	}
 
@@ -686,9 +656,7 @@ func TestBlocksFetcher_nonSkippedSlotAfter(t *testing.T) {
 		var i int
 		for i = 0; i < 100; i++ {
 			slot, err := fetcher.nonSkippedSlotAfter(ctx, seekSlot)
-			if err != nil {
-				t.Error(err)
-			}
+			assert.NoError(t, err)
 			if slot == expectedSlot {
 				found = true
 				break
@@ -729,37 +697,37 @@ func TestBlocksFetcher_filterPeers(t *testing.T) {
 			name: "single peer",
 			args: args{
 				peers: []weightedPeer{
-					{"abc", 10},
+					{"a", 10},
 				},
 				peersPercentage: 1.0,
 			},
-			want: []peer.ID{"abc"},
+			want: []peer.ID{"a"},
 		},
 		{
 			name: "multiple peers same capacity",
 			args: args{
 				peers: []weightedPeer{
-					{"abc", 10},
-					{"def", 10},
-					{"xyz", 10},
+					{"a", 10},
+					{"b", 10},
+					{"c", 10},
 				},
 				peersPercentage: 1.0,
 			},
-			want: []peer.ID{"abc", "def", "xyz"},
+			want: []peer.ID{"a", "b", "c"},
 		},
 		{
 			name: "multiple peers different capacity",
 			args: args{
 				peers: []weightedPeer{
-					{"abc", 20},
-					{"def", 15},
-					{"ghi", 10},
-					{"jkl", 90},
-					{"xyz", 20},
+					{"a", 20},
+					{"b", 15},
+					{"c", 10},
+					{"d", 90},
+					{"e", 20},
 				},
 				peersPercentage: 1.0,
 			},
-			want: []peer.ID{"ghi", "def", "abc", "xyz", "jkl"},
+			want: []peer.ID{"c", "b", "a", "e", "d"},
 		},
 	}
 	for _, tt := range tests {
@@ -772,9 +740,7 @@ func TestBlocksFetcher_filterPeers(t *testing.T) {
 				fetcher.rateLimiter.Add(pid.ID.String(), pid.usedCapacity)
 			}
 			got, err := fetcher.filterPeers(pids, tt.args.peersPercentage)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			// Re-arrange peers with the same remaining capacity, deterministically .
 			// They are deliberately shuffled - so that on the same capacity any of
 			// such peers can be selected. That's why they are sorted here.
@@ -786,9 +752,202 @@ func TestBlocksFetcher_filterPeers(t *testing.T) {
 				}
 				return i < j
 			})
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("filterPeers() got = %#v, want %#v", got, tt.want)
+			assert.DeepEqual(t, tt.want, got)
+		})
+	}
+}
+
+func TestBlocksFetcher_filterScoredPeers(t *testing.T) {
+	type weightedPeer struct {
+		peer.ID
+		usedCapacity int64
+	}
+	type args struct {
+		peers           []weightedPeer
+		peersPercentage float64
+		capacityWeight  float64
+	}
+
+	batchSize := uint64(flags.Get().BlockBatchLimit)
+	tests := []struct {
+		name   string
+		args   args
+		update func(s *peers.BlockProviderScorer)
+		want   []peer.ID
+	}{
+		{
+			name: "no peers available",
+			args: args{
+				peers:           []weightedPeer{},
+				peersPercentage: 1.0,
+				capacityWeight:  0.2,
+			},
+			want: []peer.ID{},
+		},
+		{
+			name: "single peer",
+			args: args{
+				peers: []weightedPeer{
+					{"a", 1200},
+				},
+				peersPercentage: 1.0,
+				capacityWeight:  0.2,
+			},
+			want: []peer.ID{"a"},
+		},
+		{
+			name: "multiple peers same capacity",
+			args: args{
+				peers: []weightedPeer{
+					{"a", 2400},
+					{"b", 2400},
+					{"c", 2400},
+				},
+				peersPercentage: 1.0,
+				capacityWeight:  0.2,
+			},
+			want: []peer.ID{"a", "b", "c"},
+		},
+		{
+			name: "multiple peers capacity as tie-breaker",
+			args: args{
+				peers: []weightedPeer{
+					{"a", 6000},
+					{"b", 3000},
+					{"c", 0},
+					{"d", 9000},
+					{"e", 6000},
+				},
+				peersPercentage: 1.0,
+				capacityWeight:  0.2,
+			},
+			update: func(s *peers.BlockProviderScorer) {
+				s.IncrementProcessedBlocks("a", batchSize*2)
+				s.IncrementProcessedBlocks("b", batchSize*2)
+				s.IncrementProcessedBlocks("c", batchSize*2)
+				s.IncrementProcessedBlocks("d", batchSize*2)
+				s.IncrementProcessedBlocks("e", batchSize*2)
+			},
+			want: []peer.ID{"c", "b", "a", "e", "d"},
+		},
+		{
+			name: "multiple peers same capacity different scores",
+			args: args{
+				peers: []weightedPeer{
+					{"a", 9000},
+					{"b", 9000},
+					{"c", 9000},
+					{"d", 9000},
+					{"e", 9000},
+				},
+				peersPercentage: 0.8,
+				capacityWeight:  0.2,
+			},
+			update: func(s *peers.BlockProviderScorer) {
+				s.IncrementProcessedBlocks("e", s.Params().ProcessedBlocksCap)
+				s.IncrementProcessedBlocks("b", s.Params().ProcessedBlocksCap/2)
+				s.IncrementProcessedBlocks("c", s.Params().ProcessedBlocksCap/4)
+				s.IncrementProcessedBlocks("a", s.Params().ProcessedBlocksCap/8)
+				s.IncrementProcessedBlocks("d", 0)
+			},
+			want: []peer.ID{"e", "b", "c", "a"},
+		},
+		{
+			name: "multiple peers different capacities and scores",
+			args: args{
+				peers: []weightedPeer{
+					{"a", 6500},
+					{"b", 2500},
+					{"c", 1000},
+					{"d", 9000},
+					{"e", 6500},
+				},
+				peersPercentage: 0.8,
+				capacityWeight:  0.2,
+			},
+			update: func(s *peers.BlockProviderScorer) {
+				// Make sure that score takes priority over capacity.
+				s.IncrementProcessedBlocks("c", batchSize*5)
+				s.IncrementProcessedBlocks("b", batchSize*15)
+				// Break tie using capacity as a tie-breaker (a and ghi have the same score).
+				s.IncrementProcessedBlocks("a", batchSize*3)
+				s.IncrementProcessedBlocks("e", batchSize*3)
+				// Exclude peer (peers percentage is 80%).
+				s.IncrementProcessedBlocks("d", batchSize)
+			},
+			want: []peer.ID{"b", "c", "a", "e"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mc, p2p, _ := initializeTestServices(t, []uint64{}, []*peerData{})
+			fetcher := newBlocksFetcher(context.Background(), &blocksFetcherConfig{
+				finalizationFetcher:      mc,
+				headFetcher:              mc,
+				p2p:                      p2p,
+				peerFilterCapacityWeight: tt.args.capacityWeight,
+			})
+			// Non-leaking bucket, with initial capacity of 10000.
+			fetcher.rateLimiter = leakybucket.NewCollector(0.000001, 10000, false)
+			peerIDs := make([]peer.ID, 0)
+			for _, pid := range tt.args.peers {
+				peerIDs = append(peerIDs, pid.ID)
+				fetcher.rateLimiter.Add(pid.ID.String(), pid.usedCapacity)
 			}
+			if tt.update != nil {
+				tt.update(fetcher.p2p.Peers().Scorers().BlockProviderScorer())
+			}
+			// Since peer selection is probabilistic (weighted, with high scorers having higher
+			// chance of being selected), we need multiple rounds of filtering to test the order:
+			// over multiple attempts, top scorers should be picked on high positions more often.
+			peerStats := make(map[peer.ID]int, len(tt.want))
+			var filteredPIDs []peer.ID
+			var err error
+			for i := 0; i < 1000; i++ {
+				filteredPIDs, err = fetcher.filterScoredPeers(context.Background(), peerIDs, tt.args.peersPercentage)
+				if len(filteredPIDs) <= 1 {
+					break
+				}
+				require.NoError(t, err)
+				for j, pid := range filteredPIDs {
+					// The higher peer in the list, the more "points" will it get.
+					peerStats[pid] += len(tt.want) - j
+				}
+			}
+
+			// If percentage of peers was requested, rebuild combined filtered peers list.
+			if len(filteredPIDs) != len(peerStats) && len(peerStats) > 0 {
+				filteredPIDs = []peer.ID{}
+				for pid := range peerStats {
+					filteredPIDs = append(filteredPIDs, pid)
+				}
+			}
+
+			// Sort by frequency of appearance in high positions on filtering.
+			sort.Slice(filteredPIDs, func(i, j int) bool {
+				return peerStats[filteredPIDs[i]] > peerStats[filteredPIDs[j]]
+			})
+			if tt.args.peersPercentage < 1.0 {
+				limit := uint64(math.Round(float64(len(filteredPIDs)) * tt.args.peersPercentage))
+				filteredPIDs = filteredPIDs[:limit]
+			}
+
+			// Re-arrange peers with the same remaining capacity, deterministically .
+			// They are deliberately shuffled - so that on the same capacity any of
+			// such peers can be selected. That's why they are sorted here.
+			sort.SliceStable(filteredPIDs, func(i, j int) bool {
+				score1 := fetcher.p2p.Peers().Scorers().BlockProviderScorer().Score(filteredPIDs[i])
+				score2 := fetcher.p2p.Peers().Scorers().BlockProviderScorer().Score(filteredPIDs[j])
+				if score1 == score2 {
+					cap1 := fetcher.rateLimiter.Remaining(filteredPIDs[i].String())
+					cap2 := fetcher.rateLimiter.Remaining(filteredPIDs[j].String())
+					if cap1 == cap2 {
+						return filteredPIDs[i].String() < filteredPIDs[j].String()
+					}
+				}
+				return i < j
+			})
+			assert.DeepEqual(t, tt.want, filteredPIDs)
 		})
 	}
 }
@@ -799,9 +958,7 @@ func TestBlocksFetcher_RequestBlocksRateLimitingLocks(t *testing.T) {
 	p3 := p2pt.NewTestP2P(t)
 	p1.Connect(p2)
 	p1.Connect(p3)
-	if len(p1.BHost.Network().Peers()) != 2 {
-		t.Fatal("Expected peers to be connected")
-	}
+	require.Equal(t, 2, len(p1.BHost.Network().Peers()), "Expected peers to be connected")
 	req := &p2ppb.BeaconBlocksByRangeRequest{
 		StartSlot: 100,
 		Step:      1,
@@ -811,9 +968,7 @@ func TestBlocksFetcher_RequestBlocksRateLimitingLocks(t *testing.T) {
 	topic := p2pm.RPCBlocksByRangeTopic
 	protocol := core.ProtocolID(topic + p2.Encoding().ProtocolSuffix())
 	streamHandlerFn := func(stream network.Stream) {
-		if err := stream.Close(); err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, stream.Close())
 	}
 	p2.BHost.SetStreamHandler(protocol, streamHandlerFn)
 	p3.BHost.SetStreamHandler(protocol, streamHandlerFn)
@@ -838,8 +993,8 @@ func TestBlocksFetcher_RequestBlocksRateLimitingLocks(t *testing.T) {
 				})
 			}
 			_, err := fetcher.requestBlocks(ctx, req, p2.PeerID())
-			if err != nil && err != errFetcherCtxIsDone {
-				t.Error(err)
+			if err != nil {
+				assert.ErrorContains(t, errFetcherCtxIsDone.Error(), err)
 			}
 		}
 	}()
@@ -851,9 +1006,7 @@ func TestBlocksFetcher_RequestBlocksRateLimitingLocks(t *testing.T) {
 	ch := make(chan struct{}, 1)
 	go func() {
 		_, err := fetcher.requestBlocks(ctx, req, p3.PeerID())
-		if err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, err)
 		ch <- struct{}{}
 	}()
 	timer := time.NewTimer(2 * time.Second)
@@ -887,30 +1040,30 @@ func TestBlocksFetcher_removeStalePeerLocks(t *testing.T) {
 			age:  peerLockMaxAge,
 			peersIn: []peerData{
 				{
-					peerID:   "abc",
-					accessed: roughtime.Now(),
+					peerID:   "a",
+					accessed: timeutils.Now(),
 				},
 				{
-					peerID:   "def",
-					accessed: roughtime.Now(),
+					peerID:   "b",
+					accessed: timeutils.Now(),
 				},
 				{
-					peerID:   "ghi",
-					accessed: roughtime.Now(),
+					peerID:   "c",
+					accessed: timeutils.Now(),
 				},
 			},
 			peersOut: []peerData{
 				{
-					peerID:   "abc",
-					accessed: roughtime.Now(),
+					peerID:   "a",
+					accessed: timeutils.Now(),
 				},
 				{
-					peerID:   "def",
-					accessed: roughtime.Now(),
+					peerID:   "b",
+					accessed: timeutils.Now(),
 				},
 				{
-					peerID:   "ghi",
-					accessed: roughtime.Now(),
+					peerID:   "c",
+					accessed: timeutils.Now(),
 				},
 			},
 		},
@@ -919,26 +1072,26 @@ func TestBlocksFetcher_removeStalePeerLocks(t *testing.T) {
 			age:  peerLockMaxAge,
 			peersIn: []peerData{
 				{
-					peerID:   "abc",
-					accessed: roughtime.Now(),
+					peerID:   "a",
+					accessed: timeutils.Now(),
 				},
 				{
-					peerID:   "def",
-					accessed: roughtime.Now().Add(-peerLockMaxAge),
+					peerID:   "b",
+					accessed: timeutils.Now().Add(-peerLockMaxAge),
 				},
 				{
-					peerID:   "ghi",
-					accessed: roughtime.Now(),
+					peerID:   "c",
+					accessed: timeutils.Now(),
 				},
 			},
 			peersOut: []peerData{
 				{
-					peerID:   "abc",
-					accessed: roughtime.Now(),
+					peerID:   "a",
+					accessed: timeutils.Now(),
 				},
 				{
-					peerID:   "ghi",
-					accessed: roughtime.Now(),
+					peerID:   "c",
+					accessed: timeutils.Now(),
 				},
 			},
 		},
@@ -947,16 +1100,16 @@ func TestBlocksFetcher_removeStalePeerLocks(t *testing.T) {
 			age:  peerLockMaxAge,
 			peersIn: []peerData{
 				{
-					peerID:   "abc",
-					accessed: roughtime.Now().Add(-peerLockMaxAge),
+					peerID:   "a",
+					accessed: timeutils.Now().Add(-peerLockMaxAge),
 				},
 				{
-					peerID:   "def",
-					accessed: roughtime.Now().Add(-peerLockMaxAge),
+					peerID:   "b",
+					accessed: timeutils.Now().Add(-peerLockMaxAge),
 				},
 				{
-					peerID:   "ghi",
-					accessed: roughtime.Now().Add(-peerLockMaxAge),
+					peerID:   "c",
+					accessed: timeutils.Now().Add(-peerLockMaxAge),
 				},
 			},
 			peersOut: []peerData{},
@@ -992,8 +1145,242 @@ func TestBlocksFetcher_removeStalePeerLocks(t *testing.T) {
 			sort.SliceStable(peersOut2, func(i, j int) bool {
 				return peersOut2[i].String() < peersOut2[j].String()
 			})
-			if !reflect.DeepEqual(peersOut1, peersOut2) {
-				t.Errorf("unexpected peers map, want: %#v, got: %#v", peersOut1, peersOut2)
+			assert.DeepEqual(t, peersOut1, peersOut2, "Unexpected peers map")
+		})
+	}
+}
+
+func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T) {
+	p1 := p2pt.NewTestP2P(t)
+	tests := []struct {
+		name         string
+		req          *p2ppb.BeaconBlocksByRangeRequest
+		handlerGenFn func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream)
+		wantedErr    string
+		validate     func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock)
+	}{
+		{
+			name: "no error",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      4,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step; i += req.Step {
+						blk := testutil.NewBeaconBlock()
+						blk.Block.Slot = i
+						assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+					}
+					assert.NoError(t, stream.Close())
+				}
+			},
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, req.Count, uint64(len(blocks)))
+			},
+		},
+		{
+			name: "too many blocks",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      1,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step+1; i += req.Step {
+						blk := testutil.NewBeaconBlock()
+						blk.Block.Slot = i
+						assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+					}
+					assert.NoError(t, stream.Close())
+				}
+			},
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 0, len(blocks))
+			},
+			wantedErr: errInvalidFetchedData.Error(),
+		},
+		{
+			name: "not in a consecutive order",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      1,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					blk := testutil.NewBeaconBlock()
+					blk.Block.Slot = 163
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+
+					blk = testutil.NewBeaconBlock()
+					blk.Block.Slot = 162
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+					assert.NoError(t, stream.Close())
+				}
+			},
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 0, len(blocks))
+			},
+			wantedErr: errInvalidFetchedData.Error(),
+		},
+		{
+			name: "same slot number",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      1,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					blk := testutil.NewBeaconBlock()
+					blk.Block.Slot = 160
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+
+					blk = testutil.NewBeaconBlock()
+					blk.Block.Slot = 160
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+					assert.NoError(t, stream.Close())
+				}
+			},
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 0, len(blocks))
+			},
+			wantedErr: errInvalidFetchedData.Error(),
+		},
+		{
+			name: "slot is too low",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      1,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					defer func() {
+						assert.NoError(t, stream.Close())
+					}()
+					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step; i += req.Step {
+						blk := testutil.NewBeaconBlock()
+						// Patch mid block, with invalid slot number.
+						if i == (req.StartSlot + req.Count*req.Step/2) {
+							blk.Block.Slot = req.StartSlot - 1
+							assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+							break
+						} else {
+							blk.Block.Slot = i
+							assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+						}
+					}
+				}
+			},
+			wantedErr: errInvalidFetchedData.Error(),
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 0, len(blocks))
+			},
+		},
+		{
+			name: "slot is too high",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      1,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					defer func() {
+						assert.NoError(t, stream.Close())
+					}()
+					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step; i += req.Step {
+						blk := testutil.NewBeaconBlock()
+						// Patch mid block, with invalid slot number.
+						if i == (req.StartSlot + req.Count*req.Step/2) {
+							blk.Block.Slot = req.StartSlot + req.Count*req.Step
+							assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+							break
+						} else {
+							blk.Block.Slot = i
+							assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+						}
+					}
+				}
+			},
+			wantedErr: errInvalidFetchedData.Error(),
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 0, len(blocks))
+			},
+		},
+		{
+			name: "valid step increment",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      5,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					blk := testutil.NewBeaconBlock()
+					blk.Block.Slot = 100
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+
+					blk = testutil.NewBeaconBlock()
+					blk.Block.Slot = 105
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+					assert.NoError(t, stream.Close())
+				}
+			},
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 2, len(blocks))
+			},
+		},
+		{
+			name: "invalid step increment",
+			req: &p2ppb.BeaconBlocksByRangeRequest{
+				StartSlot: 100,
+				Step:      5,
+				Count:     64,
+			},
+			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
+				return func(stream network.Stream) {
+					blk := testutil.NewBeaconBlock()
+					blk.Block.Slot = 100
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+
+					blk = testutil.NewBeaconBlock()
+					blk.Block.Slot = 103
+					assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
+					assert.NoError(t, stream.Close())
+				}
+			},
+			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
+				assert.Equal(t, 0, len(blocks))
+			},
+			wantedErr: errInvalidFetchedData.Error(),
+		},
+	}
+
+	topic := p2pm.RPCBlocksByRangeTopic
+	protocol := core.ProtocolID(topic + p1.Encoding().ProtocolSuffix())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{p2p: p1})
+	fetcher.rateLimiter = leakybucket.NewCollector(0.000001, 640, false)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p2 := p2pt.NewTestP2P(t)
+			p1.Connect(p2)
+
+			p2.BHost.SetStreamHandler(protocol, tt.handlerGenFn(tt.req))
+			blocks, err := fetcher.requestBlocks(ctx, tt.req, p2.PeerID())
+			if tt.wantedErr != "" {
+				assert.ErrorContains(t, tt.wantedErr, err)
+			} else {
+				assert.NoError(t, err)
+				tt.validate(tt.req, blocks)
 			}
 		})
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/event"
 	"github.com/prysmaticlabs/prysm/shared/mock"
 	"github.com/prysmaticlabs/prysm/shared/slotutil"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	testDB "github.com/prysmaticlabs/prysm/slasher/db/testing"
 )
 
@@ -36,7 +37,7 @@ func TestService_ReceiveBlocks(t *testing.T) {
 	).Do(func() {
 		cancel()
 	})
-	bs.receiveBlocks(ctx)
+	bs.ReceiveBlocks(ctx)
 }
 
 func TestService_ReceiveAttestations(t *testing.T) {
@@ -68,7 +69,7 @@ func TestService_ReceiveAttestations(t *testing.T) {
 	).Do(func() {
 		cancel()
 	})
-	bs.receiveAttestations(ctx)
+	bs.ReceiveAttestations(ctx)
 }
 
 func TestService_ReceiveAttestations_Batched(t *testing.T) {
@@ -110,14 +111,12 @@ func TestService_ReceiveAttestations_Batched(t *testing.T) {
 		cancel()
 	})
 
-	go bs.receiveAttestations(ctx)
+	go bs.ReceiveAttestations(ctx)
 	bs.receivedAttestationsBuffer <- att
 	att.Data.Target.Root = []byte("test root 2")
 	bs.receivedAttestationsBuffer <- att
 	att.Data.Target.Root = []byte("test root 3")
 	bs.receivedAttestationsBuffer <- att
 	atts := <-bs.collectedAttestationsBuffer
-	if len(atts) != 3 {
-		t.Fatalf("Expected %d received attestations to be batched", len(atts))
-	}
+	require.Equal(t, 3, len(atts), "Unexpected number of attestations batched")
 }

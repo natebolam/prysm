@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"bytes"
 	"context"
 
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
@@ -58,7 +59,7 @@ func (as *Server) SubmitAggregateSelectionProof(ctx context.Context, req *ethpb.
 		return nil, status.Errorf(codes.InvalidArgument, "Validator is not an aggregator")
 	}
 
-	if err := as.AttPool.AggregateUnaggregatedAttestations(); err != nil {
+	if err := as.AttPool.AggregateUnaggregatedAttestationsBySlotIndex(req.Slot, req.CommitteeIndex); err != nil {
 		return nil, status.Errorf(codes.Internal, "Could not aggregate unaggregated attestations")
 	}
 	aggregatedAtts := as.AttPool.AggregatedAttestationsBySlotIndex(req.Slot, req.CommitteeIndex)
@@ -70,13 +71,33 @@ func (as *Server) SubmitAggregateSelectionProof(ctx context.Context, req *ethpb.
 			return nil, status.Errorf(codes.Internal, "Could not find attestation for slot and committee in pool")
 		}
 	}
-	best := aggregatedAtts[0]
-	for _, aggregatedAtt := range aggregatedAtts[1:] {
-		if aggregatedAtt.AggregationBits.Count() > best.AggregationBits.Count() {
-			best = aggregatedAtt
+
+	var indexInCommittee uint64
+	for i, idx := range committee {
+		if idx == validatorIndex {
+			indexInCommittee = uint64(i)
 		}
 	}
 
+	best := aggregatedAtts[0]
+	for _, aggregatedAtt := range aggregatedAtts[1:] {
+		// The aggregator should prefer an attestation that they have signed. We check this by
+		// looking at the attestation's committee index against the validator's committee index
+		// and check the aggregate bits to ensure the validator's index is set.
+		if aggregatedAtt.Data.CommitteeIndex == req.CommitteeIndex &&
+			aggregatedAtt.AggregationBits.BitAt(indexInCommittee) &&
+			(!best.AggregationBits.BitAt(indexInCommittee) ||
+				aggregatedAtt.AggregationBits.Count() > best.AggregationBits.Count()) {
+			best = aggregatedAtt
+		}
+
+		// If the "best" still doesn't contain the validator's index, check the aggregation bits to
+		// choose the attestation with the most bits set.
+		if !best.AggregationBits.BitAt(indexInCommittee) &&
+			aggregatedAtt.AggregationBits.Count() > best.AggregationBits.Count() {
+			best = aggregatedAtt
+		}
+	}
 	a := &ethpb.AggregateAttestationAndProof{
 		Aggregate:       best,
 		SelectionProof:  req.SlotSignature,
@@ -91,6 +112,16 @@ func (as *Server) SubmitSignedAggregateSelectionProof(ctx context.Context, req *
 	if req.SignedAggregateAndProof == nil || req.SignedAggregateAndProof.Message == nil ||
 		req.SignedAggregateAndProof.Message.Aggregate == nil || req.SignedAggregateAndProof.Message.Aggregate.Data == nil {
 		return nil, status.Error(codes.InvalidArgument, "Signed aggregate request can't be nil")
+	}
+	emptySig := make([]byte, params.BeaconConfig().BLSSignatureLength)
+	if bytes.Equal(req.SignedAggregateAndProof.Signature, emptySig) ||
+		bytes.Equal(req.SignedAggregateAndProof.Message.SelectionProof, emptySig) {
+		return nil, status.Error(codes.InvalidArgument, "Signed signatures can't be zero hashes")
+	}
+
+	// As a preventive measure, a beacon node shouldn't broadcast an attestation whose slot is out of range.
+	if err := helpers.ValidateAttestationTime(req.SignedAggregateAndProof.Message.Aggregate.Data.Slot, as.GenesisTimeFetcher.GenesisTime()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, "Attestation slot is no longer valid from current time")
 	}
 
 	if err := as.P2P.Broadcast(ctx, req.SignedAggregateAndProof); err != nil {

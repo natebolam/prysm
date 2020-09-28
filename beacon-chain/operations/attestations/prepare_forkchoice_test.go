@@ -2,7 +2,7 @@ package attestations
 
 import (
 	"context"
-	"reflect"
+	"fmt"
 	"sort"
 	"testing"
 
@@ -11,13 +11,13 @@ import (
 	"github.com/prysmaticlabs/go-bitfield"
 	attaggregation "github.com/prysmaticlabs/prysm/shared/aggregation/attestations"
 	"github.com/prysmaticlabs/prysm/shared/bls"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestBatchAttestations_Multiple(t *testing.T) {
 	s, err := NewService(context.Background(), &Config{Pool: NewPool()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	sk := bls.RandKey()
 	sig := sk.Sign([]byte("dummy_test_data"))
@@ -84,38 +84,21 @@ func TestBatchAttestations_Multiple(t *testing.T) {
 			Source:          &ethpb.Checkpoint{Root: mockRoot[:]},
 			Target:          &ethpb.Checkpoint{Root: mockRoot[:]}}, AggregationBits: bitfield.Bitlist{0b100011}, Signature: sig.Marshal()}, // Duplicated
 	}
-	if err := s.pool.SaveUnaggregatedAttestations(unaggregatedAtts); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.pool.SaveAggregatedAttestations(aggregatedAtts); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.pool.SaveBlockAttestations(blockAtts); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s.batchForkChoiceAtts(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.pool.SaveUnaggregatedAttestations(unaggregatedAtts))
+	require.NoError(t, s.pool.SaveAggregatedAttestations(aggregatedAtts))
+	require.NoError(t, s.pool.SaveBlockAttestations(blockAtts))
+	require.NoError(t, s.batchForkChoiceAtts(context.Background()))
 
 	wanted, err := attaggregation.Aggregate([]*ethpb.Attestation{aggregatedAtts[0], blockAtts[0]})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	aggregated, err := attaggregation.Aggregate([]*ethpb.Attestation{aggregatedAtts[1], blockAtts[1]})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	wanted = append(wanted, aggregated...)
 	aggregated, err = attaggregation.Aggregate([]*ethpb.Attestation{aggregatedAtts[2], blockAtts[2]})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	wanted = append(wanted, aggregated...)
-	if err := s.pool.AggregateUnaggregatedAttestations(); err != nil {
-		return
-	}
+	require.NoError(t, s.pool.AggregateUnaggregatedAttestations())
 	received := s.pool.ForkchoiceAttestations()
 
 	sort.Slice(received, func(i, j int) bool {
@@ -125,16 +108,12 @@ func TestBatchAttestations_Multiple(t *testing.T) {
 		return wanted[i].Data.Slot < wanted[j].Data.Slot
 	})
 
-	if !reflect.DeepEqual(wanted, received) {
-		t.Error("Did not aggregation and save for batch")
-	}
+	assert.DeepEqual(t, wanted, received)
 }
 
 func TestBatchAttestations_Single(t *testing.T) {
 	s, err := NewService(context.Background(), &Config{Pool: NewPool()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	sk := bls.RandKey()
 	sig := sk.Sign([]byte("dummy_test_data"))
@@ -158,43 +137,24 @@ func TestBatchAttestations_Single(t *testing.T) {
 		{Data: d, AggregationBits: bitfield.Bitlist{0b100010}, Signature: sig.Marshal()},
 		{Data: d, AggregationBits: bitfield.Bitlist{0b110010}, Signature: sig.Marshal()}, // Duplicated
 	}
-	if err := s.pool.SaveUnaggregatedAttestations(unaggregatedAtts); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s.pool.SaveAggregatedAttestations(aggregatedAtts); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s.pool.SaveBlockAttestations(blockAtts); err != nil {
-		t.Fatal(err)
-	}
-
-	if err := s.batchForkChoiceAtts(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.pool.SaveUnaggregatedAttestations(unaggregatedAtts))
+	require.NoError(t, s.pool.SaveAggregatedAttestations(aggregatedAtts))
+	require.NoError(t, s.pool.SaveBlockAttestations(blockAtts))
+	require.NoError(t, s.batchForkChoiceAtts(context.Background()))
 
 	wanted, err := attaggregation.Aggregate(append(aggregatedAtts, unaggregatedAtts...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	wanted, err = attaggregation.Aggregate(append(wanted, blockAtts...))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	got := s.pool.ForkchoiceAttestations()
-	if !reflect.DeepEqual(wanted, got) {
-		t.Error("Did not aggregate and save for batch")
-	}
+	assert.DeepEqual(t, wanted, got)
 }
 
 func TestAggregateAndSaveForkChoiceAtts_Single(t *testing.T) {
 	s, err := NewService(context.Background(), &Config{Pool: NewPool()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	sk := bls.RandKey()
 	sig := sk.Sign([]byte("dummy_test_data"))
@@ -208,25 +168,16 @@ func TestAggregateAndSaveForkChoiceAtts_Single(t *testing.T) {
 	atts := []*ethpb.Attestation{
 		{Data: d, AggregationBits: bitfield.Bitlist{0b101}, Signature: sig.Marshal()},
 		{Data: d, AggregationBits: bitfield.Bitlist{0b110}, Signature: sig.Marshal()}}
-	if err := s.aggregateAndSaveForkChoiceAtts(atts); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.aggregateAndSaveForkChoiceAtts(atts))
 
 	wanted, err := attaggregation.Aggregate(atts)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !reflect.DeepEqual(wanted, s.pool.ForkchoiceAttestations()) {
-		t.Error("Did not aggregation and save")
-	}
+	require.NoError(t, err)
+	assert.DeepEqual(t, wanted, s.pool.ForkchoiceAttestations())
 }
 
 func TestAggregateAndSaveForkChoiceAtts_Multiple(t *testing.T) {
 	s, err := NewService(context.Background(), &Config{Pool: NewPool()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	sk := bls.RandKey()
 	sig := sk.Sign([]byte("dummy_test_data"))
@@ -237,46 +188,32 @@ func TestAggregateAndSaveForkChoiceAtts_Multiple(t *testing.T) {
 		Target:          &ethpb.Checkpoint{Root: mockRoot[:]},
 	}
 	d1, ok := proto.Clone(d).(*ethpb.AttestationData)
-	if !ok {
-		t.Fatal("Entity is not of type *ethpb.AttestationData")
-	}
+	require.Equal(t, true, ok, "Entity is not of type *ethpb.AttestationData")
 	d1.Slot = 1
 	d2, ok := proto.Clone(d).(*ethpb.AttestationData)
-	if !ok {
-		t.Fatal("Entity is not of type *ethpb.AttestationData")
-	}
+	require.Equal(t, true, ok, "Entity is not of type *ethpb.AttestationData")
 	d2.Slot = 2
 
 	atts1 := []*ethpb.Attestation{
 		{Data: d, AggregationBits: bitfield.Bitlist{0b101}, Signature: sig.Marshal()},
 		{Data: d, AggregationBits: bitfield.Bitlist{0b110}, Signature: sig.Marshal()},
 	}
-	if err := s.aggregateAndSaveForkChoiceAtts(atts1); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.aggregateAndSaveForkChoiceAtts(atts1))
 	atts2 := []*ethpb.Attestation{
 		{Data: d1, AggregationBits: bitfield.Bitlist{0b10110}, Signature: sig.Marshal()},
 		{Data: d1, AggregationBits: bitfield.Bitlist{0b11100}, Signature: sig.Marshal()},
 		{Data: d1, AggregationBits: bitfield.Bitlist{0b11000}, Signature: sig.Marshal()},
 	}
-	if err := s.aggregateAndSaveForkChoiceAtts(atts2); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.aggregateAndSaveForkChoiceAtts(atts2))
 	att3 := []*ethpb.Attestation{
 		{Data: d2, AggregationBits: bitfield.Bitlist{0b1100}, Signature: sig.Marshal()},
 	}
-	if err := s.aggregateAndSaveForkChoiceAtts(att3); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, s.aggregateAndSaveForkChoiceAtts(att3))
 
 	wanted, err := attaggregation.Aggregate(atts1)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	aggregated, err := attaggregation.Aggregate(atts2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	wanted = append(wanted, aggregated...)
 	wanted = append(wanted, att3...)
@@ -285,46 +222,71 @@ func TestAggregateAndSaveForkChoiceAtts_Multiple(t *testing.T) {
 	sort.Slice(received, func(i, j int) bool {
 		return received[i].Data.Slot < received[j].Data.Slot
 	})
-	if !reflect.DeepEqual(wanted, received) {
-		t.Error("Did not aggregation and save")
-	}
+	assert.DeepEqual(t, wanted, received)
 }
 
 func TestSeenAttestations_PresentInCache(t *testing.T) {
 	s, err := NewService(context.Background(), &Config{Pool: NewPool()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
-	att1 := &ethpb.Attestation{Data: &ethpb.AttestationData{}, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x13} /* 0b00010011 */}
+	ad1 := &ethpb.AttestationData{
+		Slot:            0,
+		CommitteeIndex:  0,
+		BeaconBlockRoot: make([]byte, 32),
+		Source: &ethpb.Checkpoint{
+			Epoch: 0,
+			Root:  make([]byte, 32),
+		},
+		Target: &ethpb.Checkpoint{
+			Epoch: 0,
+			Root:  make([]byte, 32),
+		},
+	}
+	att1 := &ethpb.Attestation{Data: ad1, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x13} /* 0b00010011 */}
 	got, err := s.seen(att1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Error("Wanted false, got true")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, false, got)
 
-	att2 := &ethpb.Attestation{Data: &ethpb.AttestationData{}, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x17} /* 0b00010111 */}
+	att2 := &ethpb.Attestation{Data: ad1, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x17} /* 0b00010111 */}
 	got, err = s.seen(att2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got {
-		t.Error("Wanted false, got true")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, false, got)
 
-	att3 := &ethpb.Attestation{Data: &ethpb.AttestationData{}, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x17} /* 0b00010111 */}
+	att3 := &ethpb.Attestation{Data: ad1, Signature: []byte{'A'}, AggregationBits: bitfield.Bitlist{0x17} /* 0b00010111 */}
 	got, err = s.seen(att3)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got {
-		t.Error("Wanted true, got false")
-	}
+	require.NoError(t, err)
+	assert.Equal(t, true, got)
 }
 
 func TestService_seen(t *testing.T) {
+	ad1 := &ethpb.AttestationData{
+		Slot:            1,
+		CommitteeIndex:  0,
+		BeaconBlockRoot: make([]byte, 32),
+		Source: &ethpb.Checkpoint{
+			Epoch: 0,
+			Root:  make([]byte, 32),
+		},
+		Target: &ethpb.Checkpoint{
+			Epoch: 0,
+			Root:  make([]byte, 32),
+		},
+	}
+
+	ad2 := &ethpb.AttestationData{
+		Slot:            2,
+		CommitteeIndex:  0,
+		BeaconBlockRoot: make([]byte, 32),
+		Source: &ethpb.Checkpoint{
+			Epoch: 0,
+			Root:  make([]byte, 32),
+		},
+		Target: &ethpb.Checkpoint{
+			Epoch: 0,
+			Root:  make([]byte, 32),
+		},
+	}
+
 	// Attestation are checked in order of this list.
 	tests := []struct {
 		att  *ethpb.Attestation
@@ -333,59 +295,55 @@ func TestService_seen(t *testing.T) {
 		{
 			att: &ethpb.Attestation{
 				AggregationBits: bitfield.Bitlist{0b11011},
-				Data:            &ethpb.AttestationData{Slot: 1},
+				Data:            ad1,
 			},
 			want: false,
 		},
 		{
 			att: &ethpb.Attestation{
 				AggregationBits: bitfield.Bitlist{0b11011},
-				Data:            &ethpb.AttestationData{Slot: 1},
+				Data:            ad1,
 			},
 			want: true, // Exact same attestation should return true
 		},
 		{
 			att: &ethpb.Attestation{
 				AggregationBits: bitfield.Bitlist{0b10101},
-				Data:            &ethpb.AttestationData{Slot: 1},
+				Data:            ad1,
 			},
 			want: false, // Haven't seen the bit at index 2 yet.
 		},
 		{
 			att: &ethpb.Attestation{
 				AggregationBits: bitfield.Bitlist{0b11111},
-				Data:            &ethpb.AttestationData{Slot: 1},
+				Data:            ad1,
 			},
 			want: true, // We've full committee at this point.
 		},
 		{
 			att: &ethpb.Attestation{
 				AggregationBits: bitfield.Bitlist{0b11111},
-				Data:            &ethpb.AttestationData{Slot: 2},
+				Data:            ad2,
 			},
 			want: false, // Different root is different bitlist.
 		},
 		{
 			att: &ethpb.Attestation{
 				AggregationBits: bitfield.Bitlist{0b11111001},
-				Data:            &ethpb.AttestationData{Slot: 1},
+				Data:            ad1,
 			},
 			want: false, // Sanity test that an attestation of different lengths does not panic.
 		},
 	}
 
 	s, err := NewService(context.Background(), &Config{Pool: NewPool()})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	for i, tt := range tests {
-		got, err := s.seen(tt.att)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != tt.want {
-			t.Errorf("Test %d failed. Got=%v want=%v", i, got, tt.want)
-		}
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			got, err := s.seen(tt.att)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/prysmaticlabs/go-bitfield"
 	coreutils "github.com/prysmaticlabs/prysm/beacon-chain/core/state/stateutils"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/hashutil"
 )
 
@@ -122,8 +123,9 @@ func (b *BeaconState) UpdateBlockRootAtIndex(idx uint64, blockRoot [32]byte) err
 	if uint64(len(b.state.BlockRoots)) <= idx {
 		return fmt.Errorf("invalid index provided %d", idx)
 	}
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
-	b.lock.RLock()
 	r := b.state.BlockRoots
 	if ref := b.sharedFieldReferences[blockRoots]; ref.Refs() > 1 {
 		// Copy elements in underlying array by reference.
@@ -132,17 +134,12 @@ func (b *BeaconState) UpdateBlockRootAtIndex(idx uint64, blockRoot [32]byte) err
 		ref.MinusRef()
 		b.sharedFieldReferences[blockRoots] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	// Must secure lock after copy or hit a deadlock.
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	r[idx] = blockRoot[:]
 	b.state.BlockRoots = r
 
 	b.markFieldAsDirty(blockRoots)
-	b.AddDirtyIndices(blockRoots, []uint64{idx})
+	b.addDirtyIndices(blockRoots, []uint64{idx})
 	return nil
 }
 
@@ -176,6 +173,10 @@ func (b *BeaconState) UpdateStateRootAtIndex(idx uint64, stateRoot [32]byte) err
 		b.lock.RUnlock()
 		return errors.Errorf("invalid index provided %d", idx)
 	}
+	b.lock.RUnlock()
+
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
 	// Check if we hold the only reference to the shared state roots slice.
 	r := b.state.StateRoots
@@ -186,17 +187,12 @@ func (b *BeaconState) UpdateStateRootAtIndex(idx uint64, stateRoot [32]byte) err
 		ref.MinusRef()
 		b.sharedFieldReferences[stateRoots] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	// Must secure lock after copy or hit a deadlock.
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	r[idx] = stateRoot[:]
 	b.state.StateRoots = r
 
 	b.markFieldAsDirty(stateRoots)
-	b.AddDirtyIndices(stateRoots, []uint64{idx})
+	b.addDirtyIndices(stateRoots, []uint64{idx})
 	return nil
 }
 
@@ -254,7 +250,9 @@ func (b *BeaconState) AppendEth1DataVotes(val *ethpb.Eth1Data) error {
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	votes := b.state.Eth1DataVotes
 	if b.sharedFieldReferences[eth1DataVotes].Refs() > 1 {
 		// Copy elements in underlying array by reference.
@@ -263,14 +261,10 @@ func (b *BeaconState) AppendEth1DataVotes(val *ethpb.Eth1Data) error {
 		b.sharedFieldReferences[eth1DataVotes].MinusRef()
 		b.sharedFieldReferences[eth1DataVotes] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	b.state.Eth1DataVotes = append(votes, val)
 	b.markFieldAsDirty(eth1DataVotes)
-	b.AddDirtyIndices(eth1DataVotes, []uint64{uint64(len(b.state.Eth1DataVotes) - 1)})
+	b.addDirtyIndices(eth1DataVotes, []uint64{uint64(len(b.state.Eth1DataVotes) - 1)})
 	return nil
 }
 
@@ -301,7 +295,10 @@ func (b *BeaconState) SetValidators(val []*ethpb.Validator) error {
 	b.sharedFieldReferences[validators] = &reference{refs: 1}
 	b.markFieldAsDirty(validators)
 	b.rebuildTrie[validators] = true
-	b.valIdxMap = coreutils.ValidatorIndexMap(b.state.Validators)
+	b.valMapHandler = &validatorMapHandler{
+		valIdxMap: coreutils.ValidatorIndexMap(b.state.Validators),
+		mapRef:    &reference{refs: 1},
+	}
 	return nil
 }
 
@@ -311,16 +308,16 @@ func (b *BeaconState) ApplyToEveryValidator(f func(idx int, val *ethpb.Validator
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
+	b.lock.Lock()
 	v := b.state.Validators
 	if ref := b.sharedFieldReferences[validators]; ref.Refs() > 1 {
 		// Perform a copy since this is a shared reference and we don't want to mutate others.
-		v = b.Validators()
+		v = b.validators()
 
 		ref.MinusRef()
 		b.sharedFieldReferences[validators] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
+	b.lock.Unlock()
 	changedVals := []uint64{}
 	for i, val := range v {
 		changed, err := f(i, val)
@@ -337,7 +334,7 @@ func (b *BeaconState) ApplyToEveryValidator(f func(idx int, val *ethpb.Validator
 
 	b.state.Validators = v
 	b.markFieldAsDirty(validators)
-	b.AddDirtyIndices(validators, changedVals)
+	b.addDirtyIndices(validators, changedVals)
 
 	return nil
 }
@@ -351,25 +348,22 @@ func (b *BeaconState) UpdateValidatorAtIndex(idx uint64, val *ethpb.Validator) e
 	if uint64(len(b.state.Validators)) <= idx {
 		return errors.Errorf("invalid index provided %d", idx)
 	}
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
-	b.lock.RLock()
 	v := b.state.Validators
 	if ref := b.sharedFieldReferences[validators]; ref.Refs() > 1 {
 		// Perform a copy since this is a shared reference and we don't want to mutate others.
-		v = b.Validators()
+		v = b.validators()
 
 		ref.MinusRef()
 		b.sharedFieldReferences[validators] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	v[idx] = val
 	b.state.Validators = v
 	b.markFieldAsDirty(validators)
-	b.AddDirtyIndices(validators, []uint64{idx})
+	b.addDirtyIndices(validators, []uint64{idx})
 
 	return nil
 }
@@ -377,14 +371,15 @@ func (b *BeaconState) UpdateValidatorAtIndex(idx uint64, val *ethpb.Validator) e
 // SetValidatorIndexByPubkey updates the validator index mapping maintained internally to
 // a given input 48-byte, public key.
 func (b *BeaconState) SetValidatorIndexByPubkey(pubKey [48]byte, validatorIdx uint64) {
-	// Copy on write since this is a shared map.
-	m := b.validatorIndexMap()
-
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	m[pubKey] = validatorIdx
-	b.valIdxMap = m
+	if ref := b.valMapHandler.mapRef; ref.Refs() > 1 {
+		valMap := b.valMapHandler.copy()
+		ref.MinusRef()
+		b.valMapHandler = valMap
+	}
+	b.valMapHandler.valIdxMap[pubKey] = validatorIdx
 }
 
 // SetBalances for the beacon state. Updates the entire
@@ -413,18 +408,15 @@ func (b *BeaconState) UpdateBalancesAtIndex(idx uint64, val uint64) error {
 	if uint64(len(b.state.Balances)) <= idx {
 		return errors.Errorf("invalid index provided %d", idx)
 	}
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
-	b.lock.RLock()
 	bals := b.state.Balances
 	if b.sharedFieldReferences[balances].Refs() > 1 {
-		bals = b.Balances()
+		bals = b.balances()
 		b.sharedFieldReferences[balances].MinusRef()
 		b.sharedFieldReferences[balances] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	bals[idx] = val
 	b.state.Balances = bals
@@ -459,8 +451,9 @@ func (b *BeaconState) UpdateRandaoMixesAtIndex(idx uint64, val []byte) error {
 	if uint64(len(b.state.RandaoMixes)) <= idx {
 		return errors.Errorf("invalid index provided %d", idx)
 	}
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
-	b.lock.RLock()
 	mixes := b.state.RandaoMixes
 	if refs := b.sharedFieldReferences[randaoMixes].Refs(); refs > 1 {
 		// Copy elements in underlying array by reference.
@@ -469,15 +462,11 @@ func (b *BeaconState) UpdateRandaoMixesAtIndex(idx uint64, val []byte) error {
 		b.sharedFieldReferences[randaoMixes].MinusRef()
 		b.sharedFieldReferences[randaoMixes] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	mixes[idx] = val
 	b.state.RandaoMixes = mixes
 	b.markFieldAsDirty(randaoMixes)
-	b.AddDirtyIndices(randaoMixes, []uint64{idx})
+	b.addDirtyIndices(randaoMixes, []uint64{idx})
 
 	return nil
 }
@@ -508,18 +497,15 @@ func (b *BeaconState) UpdateSlashingsAtIndex(idx uint64, val uint64) error {
 	if uint64(len(b.state.Slashings)) <= idx {
 		return errors.Errorf("invalid index provided %d", idx)
 	}
-	b.lock.RLock()
-	s := b.state.Slashings
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
+	s := b.state.Slashings
 	if b.sharedFieldReferences[slashings].Refs() > 1 {
-		s = b.Slashings()
+		s = b.slashings()
 		b.sharedFieldReferences[slashings].MinusRef()
 		b.sharedFieldReferences[slashings] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	s[idx] = val
 
@@ -571,7 +557,9 @@ func (b *BeaconState) AppendHistoricalRoots(root [32]byte) error {
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	roots := b.state.HistoricalRoots
 	if b.sharedFieldReferences[historicalRoots].Refs() > 1 {
 		roots = make([][]byte, len(b.state.HistoricalRoots))
@@ -579,10 +567,6 @@ func (b *BeaconState) AppendHistoricalRoots(root [32]byte) error {
 		b.sharedFieldReferences[historicalRoots].MinusRef()
 		b.sharedFieldReferences[historicalRoots] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	b.state.HistoricalRoots = append(roots, root[:])
 	b.markFieldAsDirty(historicalRoots)
@@ -595,7 +579,8 @@ func (b *BeaconState) AppendCurrentEpochAttestations(val *pbp2p.PendingAttestati
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
 	atts := b.state.CurrentEpochAttestations
 	if b.sharedFieldReferences[currentEpochAttestations].Refs() > 1 {
@@ -605,10 +590,6 @@ func (b *BeaconState) AppendCurrentEpochAttestations(val *pbp2p.PendingAttestati
 		b.sharedFieldReferences[currentEpochAttestations].MinusRef()
 		b.sharedFieldReferences[currentEpochAttestations] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	b.state.CurrentEpochAttestations = append(atts, val)
 	b.markFieldAsDirty(currentEpochAttestations)
@@ -622,7 +603,9 @@ func (b *BeaconState) AppendPreviousEpochAttestations(val *pbp2p.PendingAttestat
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
+	b.lock.Lock()
+	defer b.lock.Unlock()
+
 	atts := b.state.PreviousEpochAttestations
 	if b.sharedFieldReferences[previousEpochAttestations].Refs() > 1 {
 		atts = make([]*pbp2p.PendingAttestation, len(b.state.PreviousEpochAttestations))
@@ -630,14 +613,10 @@ func (b *BeaconState) AppendPreviousEpochAttestations(val *pbp2p.PendingAttestat
 		b.sharedFieldReferences[previousEpochAttestations].MinusRef()
 		b.sharedFieldReferences[previousEpochAttestations] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	b.state.PreviousEpochAttestations = append(atts, val)
 	b.markFieldAsDirty(previousEpochAttestations)
-	b.AddDirtyIndices(previousEpochAttestations, []uint64{uint64(len(b.state.PreviousEpochAttestations) - 1)})
+	b.addDirtyIndices(previousEpochAttestations, []uint64{uint64(len(b.state.PreviousEpochAttestations) - 1)})
 
 	return nil
 }
@@ -648,27 +627,30 @@ func (b *BeaconState) AppendValidator(val *ethpb.Validator) error {
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
-	vals := b.state.Validators
-	if b.sharedFieldReferences[validators].Refs() > 1 {
-		vals = b.Validators()
-		b.sharedFieldReferences[validators].MinusRef()
-		b.sharedFieldReferences[validators] = &reference{refs: 1}
-	}
-	b.lock.RUnlock()
-
 	b.lock.Lock()
 	defer b.lock.Unlock()
 
-	// append validator to slice and add
-	// it to the validator map
+	vals := b.state.Validators
+	if b.sharedFieldReferences[validators].Refs() > 1 {
+		vals = b.validators()
+		b.sharedFieldReferences[validators].MinusRef()
+		b.sharedFieldReferences[validators] = &reference{refs: 1}
+	}
+
+	// append validator to slice
 	b.state.Validators = append(vals, val)
 	valIdx := uint64(len(b.state.Validators) - 1)
-	valMap := coreutils.ValidatorIndexMap(b.state.Validators)
+
+	// Copy if this is a shared validator map
+	if ref := b.valMapHandler.mapRef; ref.Refs() > 1 {
+		valMap := b.valMapHandler.copy()
+		ref.MinusRef()
+		b.valMapHandler = valMap
+	}
+	b.valMapHandler.valIdxMap[bytesutil.ToBytes48(val.PublicKey)] = valIdx
 
 	b.markFieldAsDirty(validators)
-	b.AddDirtyIndices(validators, []uint64{valIdx})
-	b.valIdxMap = valMap
+	b.addDirtyIndices(validators, []uint64{valIdx})
 	return nil
 }
 
@@ -678,18 +660,15 @@ func (b *BeaconState) AppendBalance(bal uint64) error {
 	if !b.HasInnerState() {
 		return ErrNilInnerState
 	}
-	b.lock.RLock()
+	b.lock.Lock()
+	defer b.lock.Unlock()
 
 	bals := b.state.Balances
 	if b.sharedFieldReferences[balances].Refs() > 1 {
-		bals = b.Balances()
+		bals = b.balances()
 		b.sharedFieldReferences[balances].MinusRef()
 		b.sharedFieldReferences[balances] = &reference{refs: 1}
 	}
-	b.lock.RUnlock()
-
-	b.lock.Lock()
-	defer b.lock.Unlock()
 
 	b.state.Balances = append(bals, bal)
 	b.markFieldAsDirty(balances)
@@ -791,8 +770,8 @@ func (b *BeaconState) markFieldAsDirty(field fieldIndex) {
 	// do nothing if field already exists
 }
 
-// AddDirtyIndices adds the relevant dirty field indices, so that they
+// addDirtyIndices adds the relevant dirty field indices, so that they
 // can be recomputed.
-func (b *BeaconState) AddDirtyIndices(index fieldIndex, indices []uint64) {
+func (b *BeaconState) addDirtyIndices(index fieldIndex, indices []uint64) {
 	b.dirtyIndices[index] = append(b.dirtyIndices[index], indices...)
 }

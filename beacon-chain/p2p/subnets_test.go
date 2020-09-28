@@ -1,6 +1,7 @@
 package p2p
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	statefeed "github.com/prysmaticlabs/prysm/beacon-chain/core/feed/state"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
+	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestStartDiscV5_DiscoverPeersWithSubnets(t *testing.T) {
@@ -24,7 +27,8 @@ func TestStartDiscV5_DiscoverPeersWithSubnets(t *testing.T) {
 		genesisTime:           genesisTime,
 		genesisValidatorsRoot: genesisValidatorsRoot,
 	}
-	bootListener := s.createListener(ipAddr, pkey)
+	bootListener, err := s.createListener(ipAddr, pkey)
+	require.NoError(t, err)
 	defer bootListener.Close()
 
 	bootNode := bootListener.Self()
@@ -51,9 +55,7 @@ func TestStartDiscV5_DiscoverPeersWithSubnets(t *testing.T) {
 			genesisValidatorsRoot: genesisValidatorsRoot,
 		}
 		listener, err := s.startDiscoveryV5(ipAddr, pkey)
-		if err != nil {
-			t.Errorf("Could not start discovery for node: %v", err)
-		}
+		assert.NoError(t, err, "Could not start discovery for node")
 		bitV := bitfield.NewBitvector64()
 		bitV.SetBitAt(uint64(i), true)
 
@@ -77,10 +79,8 @@ func TestStartDiscV5_DiscoverPeersWithSubnets(t *testing.T) {
 		UDPPort:             uint(port),
 	}
 	cfg.StateNotifier = &mock.MockStateNotifier{}
-	s, err := NewService(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s, err = NewService(context.Background(), cfg)
+	require.NoError(t, err)
 	exitRoutine := make(chan bool)
 	go func() {
 		s.Start()
@@ -101,18 +101,13 @@ func TestStartDiscV5_DiscoverPeersWithSubnets(t *testing.T) {
 	time.Sleep(6 * discoveryWaitTime)
 
 	// look up 3 different subnets
-	exists, err := s.FindPeersWithSubnet(1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exists2, err := s.FindPeersWithSubnet(2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exists3, err := s.FindPeersWithSubnet(3)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ctx := context.Background()
+	exists, err := s.FindPeersWithSubnet(ctx, 1)
+	require.NoError(t, err)
+	exists2, err := s.FindPeersWithSubnet(ctx, 2)
+	require.NoError(t, err)
+	exists3, err := s.FindPeersWithSubnet(ctx, 3)
+	require.NoError(t, err)
 	if !exists || !exists2 || !exists3 {
 		t.Fatal("Peer with subnet doesn't exist")
 	}
@@ -120,22 +115,18 @@ func TestStartDiscV5_DiscoverPeersWithSubnets(t *testing.T) {
 	// Update ENR of a peer.
 	testService := &Service{
 		dv5Listener: listeners[0],
-		metaData:    &pb.MetaData{},
+		metaData: &pb.MetaData{
+			Attnets: bitfield.NewBitvector64(),
+		},
 	}
 	cache.SubnetIDs.AddAttesterSubnetID(0, 10)
 	testService.RefreshENR()
 	time.Sleep(2 * time.Second)
 
-	exists, err = s.FindPeersWithSubnet(2)
-	if err != nil {
-		t.Fatal(err)
-	}
+	exists, err = s.FindPeersWithSubnet(ctx, 2)
+	require.NoError(t, err)
 
-	if !exists {
-		t.Fatal("Peer with subnet doesn't exist")
-	}
-	if err := s.Stop(); err != nil {
-		t.Fatal(err)
-	}
+	assert.Equal(t, true, exists, "Peer with subnet doesn't exist")
+	assert.NoError(t, s.Stop())
 	exitRoutine <- true
 }

@@ -11,7 +11,7 @@ import (
 	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 )
 
 var (
@@ -76,13 +76,25 @@ var (
 		Name: "current_eth1_data_deposit_count",
 		Help: "The current eth1 deposit count in the last processed state eth1data field.",
 	})
-	totalEligibleBalances = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "total_eligible_balances",
-		Help: "The total amount of ether, in gwei, that is eligible for voting of previous epoch",
+	stateTrieReferences = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "field_references",
+		Help: "The number of states a particular field is shared with.",
+	}, []string{"state"})
+	prevEpochActiveBalances = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "beacon_prev_epoch_active_gwei",
+		Help: "The total amount of ether, in gwei, that was active for voting of previous epoch",
 	})
-	totalVotedTargetBalances = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "total_voted_target_balances",
+	prevEpochSourceBalances = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "beacon_prev_epoch_source_gwei",
+		Help: "The total amount of ether, in gwei, that has been used in voting attestation source of previous epoch",
+	})
+	prevEpochTargetBalances = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "beacon_prev_epoch_target_gwei",
 		Help: "The total amount of ether, in gwei, that has been used in voting attestation target of previous epoch",
+	})
+	prevEpochHeadBalances = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "beacon_prev_epoch_head_gwei",
+		Help: "The total amount of ether, in gwei, that has been used in voting attestation head of previous epoch",
 	})
 	reorgCount = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "beacon_reorg_total",
@@ -102,6 +114,15 @@ var (
 			Buckets: []float64{1, 2, 3, 4, 6, 32, 64},
 		},
 	)
+	// TODO(7141): Remove deprecated metrics below.
+	totalEligibleBalances = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "total_eligible_balances",
+		Help: "The total amount of ether, in gwei, that is eligible for voting of previous epoch",
+	})
+	totalVotedTargetBalances = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "total_voted_target_balances",
+		Help: "The total amount of ether, in gwei, that has been used in voting attestation target of previous epoch",
+	})
 )
 
 // reportSlotMetrics reports slot related metrics.
@@ -201,6 +222,14 @@ func reportEpochMetrics(state *stateTrie.BeaconState) {
 	if precompute.Balances != nil {
 		totalEligibleBalances.Set(float64(precompute.Balances.ActivePrevEpoch))
 		totalVotedTargetBalances.Set(float64(precompute.Balances.PrevEpochTargetAttested))
+		prevEpochActiveBalances.Set(float64(precompute.Balances.ActivePrevEpoch))
+		prevEpochSourceBalances.Set(float64(precompute.Balances.PrevEpochAttested))
+		prevEpochTargetBalances.Set(float64(precompute.Balances.PrevEpochTargetAttested))
+		prevEpochHeadBalances.Set(float64(precompute.Balances.PrevEpochHeadAttested))
+	}
+	refMap := state.FieldReferencesCount()
+	for name, val := range refMap {
+		stateTrieReferences.WithLabelValues(name).Set(float64(val))
 	}
 }
 
@@ -210,7 +239,7 @@ func captureSentTimeMetric(genesisTime uint64, currentSlot uint64) error {
 	if err != nil {
 		return err
 	}
-	diffMs := roughtime.Now().Sub(startTime) / time.Millisecond
+	diffMs := timeutils.Now().Sub(startTime) / time.Millisecond
 	sentBlockPropagationHistogram.Observe(float64(diffMs))
 
 	return nil

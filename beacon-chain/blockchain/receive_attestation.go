@@ -10,11 +10,12 @@ import (
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/feed"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state"
+	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/roughtime"
 	"github.com/prysmaticlabs/prysm/shared/slotutil"
+	"github.com/prysmaticlabs/prysm/shared/timeutils"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
 )
@@ -24,6 +25,8 @@ type AttestationReceiver interface {
 	ReceiveAttestationNoPubsub(ctx context.Context, att *ethpb.Attestation) error
 	IsValidAttestation(ctx context.Context, att *ethpb.Attestation) bool
 	AttestationPreState(ctx context.Context, att *ethpb.Attestation) (*state.BeaconState, error)
+	AttestationCheckPtInfo(ctx context.Context, att *ethpb.Attestation) (*pb.CheckPtInfo, error)
+	VerifyLmdFfgConsistency(ctx context.Context, att *ethpb.Attestation) error
 }
 
 // ReceiveAttestationNoPubsub is a function that defines the operations that are performed on
@@ -61,7 +64,7 @@ func (s *Service) IsValidAttestation(ctx context.Context, att *ethpb.Attestation
 		return false
 	}
 
-	if err := blocks.VerifyAttestation(ctx, baseState, att); err != nil {
+	if err := blocks.VerifyAttestationSignature(ctx, baseState, att); err != nil {
 		log.WithError(err).Error("Failed to validate attestation")
 		return false
 	}
@@ -71,7 +74,32 @@ func (s *Service) IsValidAttestation(ctx context.Context, att *ethpb.Attestation
 
 // AttestationPreState returns the pre state of attestation.
 func (s *Service) AttestationPreState(ctx context.Context, att *ethpb.Attestation) (*state.BeaconState, error) {
+	ss, err := helpers.StartSlot(att.Data.Target.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	if err := helpers.ValidateSlotClock(ss, uint64(s.genesisTime.Unix())); err != nil {
+		return nil, err
+	}
 	return s.getAttPreState(ctx, att.Data.Target)
+}
+
+// AttestationCheckPtInfo returns the check point info of attestation that can be used to verify the attestation
+// contents and signatures.
+func (s *Service) AttestationCheckPtInfo(ctx context.Context, att *ethpb.Attestation) (*pb.CheckPtInfo, error) {
+	ss, err := helpers.StartSlot(att.Data.Target.Epoch)
+	if err != nil {
+		return nil, err
+	}
+	if err := helpers.ValidateSlotClock(ss, uint64(s.genesisTime.Unix())); err != nil {
+		return nil, err
+	}
+	return s.getAttCheckPtInfo(ctx, att.Data.Target, helpers.SlotToEpoch(att.Data.Slot))
+}
+
+// VerifyLmdFfgConsistency verifies that attestation's LMD and FFG votes are consistency to each other.
+func (s *Service) VerifyLmdFfgConsistency(ctx context.Context, a *ethpb.Attestation) error {
+	return s.verifyLMDFFGConsistent(ctx, a.Data.Target.Epoch, a.Data.Target.Root, a.Data.BeaconBlockRoot)
 }
 
 // This processes attestations from the attestation pool to account for validator votes and fork choice.
@@ -89,7 +117,7 @@ func (s *Service) processAttestation(subscribedToStateEvents chan struct{}) {
 		case <-s.ctx.Done():
 			return
 		case <-st.C():
-			ctx := context.Background()
+			ctx := s.ctx
 			atts := s.attPool.ForkchoiceAttestations()
 			for _, a := range atts {
 				// Based on the spec, don't process the attestation until the subsequent slot.
@@ -131,7 +159,7 @@ func (s *Service) processAttestation(subscribedToStateEvents chan struct{}) {
 // This verifies the epoch of input checkpoint is within current epoch and previous epoch
 // with respect to current time. Returns true if it's within, false if it's not.
 func (s *Service) verifyCheckpointEpoch(c *ethpb.Checkpoint) bool {
-	now := uint64(roughtime.Now().Unix())
+	now := uint64(timeutils.Now().Unix())
 	genesisTime := uint64(s.genesisTime.Unix())
 	currentSlot := (now - genesisTime) / params.BeaconConfig().SecondsPerSlot
 	currentEpoch := helpers.SlotToEpoch(currentSlot)
