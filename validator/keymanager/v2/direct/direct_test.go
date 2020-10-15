@@ -31,7 +31,7 @@ func TestDirectKeymanager_CreateAccount(t *testing.T) {
 		accountsStore: &AccountStore{},
 	}
 	ctx := context.Background()
-	createdPubKey, err := dr.CreateAccount(ctx)
+	createdPubKey, _, err := dr.CreateAccount(ctx)
 	require.NoError(t, err)
 
 	// Ensure the keystore file was written to the wallet
@@ -77,7 +77,7 @@ func TestDirectKeymanager_RemoveAccounts(t *testing.T) {
 	numAccounts := 5
 	ctx := context.Background()
 	for i := 0; i < numAccounts; i++ {
-		_, err := dr.CreateAccount(ctx)
+		_, _, err := dr.CreateAccount(ctx)
 		require.NoError(t, err)
 	}
 	accounts, err := dr.FetchValidatingPublicKeys(ctx)
@@ -145,6 +145,39 @@ func TestDirectKeymanager_FetchValidatingPublicKeys(t *testing.T) {
 	}
 }
 
+func TestDirectKeymanager_FetchValidatingPrivateKeys(t *testing.T) {
+	password := "secretPassw0rd$1999"
+	wallet := &mock.Wallet{
+		Files:          make(map[string]map[string][]byte),
+		WalletPassword: password,
+	}
+	dr := &Keymanager{
+		wallet:        wallet,
+		accountsStore: &AccountStore{},
+	}
+	// First, generate accounts and their keystore.json files.
+	ctx := context.Background()
+	numAccounts := 10
+	wantedPrivateKeys := make([][32]byte, numAccounts)
+	for i := 0; i < numAccounts; i++ {
+		privKey := bls.RandKey()
+		privKeyData := privKey.Marshal()
+		pubKey := bytesutil.ToBytes48(privKey.PublicKey().Marshal())
+		wantedPrivateKeys[i] = bytesutil.ToBytes32(privKeyData)
+		dr.accountsStore.PublicKeys = append(dr.accountsStore.PublicKeys, pubKey[:])
+		dr.accountsStore.PrivateKeys = append(dr.accountsStore.PrivateKeys, privKeyData)
+	}
+	require.NoError(t, dr.initializeKeysCachesFromKeystore())
+	privateKeys, err := dr.FetchValidatingPrivateKeys(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, numAccounts, len(privateKeys))
+	// FetchValidatingPrivateKeys is also used in generating the output of account list
+	// therefore the results must be in the same order as the order in which the accounts were created
+	for i, key := range wantedPrivateKeys {
+		assert.Equal(t, key, privateKeys[i])
+	}
+}
+
 func TestDirectKeymanager_Sign(t *testing.T) {
 	password := "secretPassw0rd$1999"
 	wallet := &mock.Wallet{
@@ -161,7 +194,7 @@ func TestDirectKeymanager_Sign(t *testing.T) {
 	ctx := context.Background()
 	numAccounts := 10
 	for i := 0; i < numAccounts; i++ {
-		_, err := dr.CreateAccount(ctx)
+		_, _, err := dr.CreateAccount(ctx)
 		require.NoError(t, err)
 	}
 
@@ -223,9 +256,8 @@ func TestDirectKeymanager_Sign_NoPublicKeyInCache(t *testing.T) {
 	req := &validatorpb.SignRequest{
 		PublicKey: []byte("hello world"),
 	}
-	dr := &Keymanager{
-		secretKeysCache: make(map[[48]byte]bls.SecretKey),
-	}
+	secretKeysCache = make(map[[48]byte]bls.SecretKey)
+	dr := &Keymanager{}
 	_, err := dr.Sign(context.Background(), req)
 	assert.ErrorContains(t, "no signing key found in keys cache", err)
 }
@@ -245,7 +277,7 @@ func TestDirectKeymanager_RefreshWalletPassword(t *testing.T) {
 	ctx := context.Background()
 	numAccounts := 5
 	for i := 0; i < numAccounts; i++ {
-		_, err := dr.CreateAccount(ctx)
+		_, _, err := dr.CreateAccount(ctx)
 		require.NoError(t, err)
 	}
 

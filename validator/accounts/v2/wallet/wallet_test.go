@@ -58,7 +58,6 @@ func setupWalletCtx(
 	app := cli.App{}
 	set := flag.NewFlagSet("test", 0)
 	set.String(flags.WalletDirFlag.Name, cfg.walletDir, "")
-	set.String(flags.DeprecatedPasswordsDirFlag.Name, cfg.passwordsDir, "")
 	set.String(flags.KeysDirFlag.Name, cfg.keysDir, "")
 	set.String(flags.KeymanagerKindFlag.Name, cfg.keymanagerKind.String(), "")
 	set.String(flags.DeletePublicKeysFlag.Name, cfg.deletePublicKeys, "")
@@ -76,7 +75,6 @@ func setupWalletCtx(
 		assert.NoError(tb, set.Set(flags.ImportPrivateKeyFileFlag.Name, cfg.privateKeyFile))
 	}
 	assert.NoError(tb, set.Set(flags.WalletDirFlag.Name, cfg.walletDir))
-	assert.NoError(tb, set.Set(flags.DeprecatedPasswordsDirFlag.Name, cfg.passwordsDir))
 	assert.NoError(tb, set.Set(flags.KeysDirFlag.Name, cfg.keysDir))
 	assert.NoError(tb, set.Set(flags.KeymanagerKindFlag.Name, cfg.keymanagerKind.String()))
 	assert.NoError(tb, set.Set(flags.DeletePublicKeysFlag.Name, cfg.deletePublicKeys))
@@ -114,15 +112,14 @@ func Test_Exists_RandomFiles(t *testing.T) {
 	randPath, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	require.NoError(t, err, "Could not generate random file path")
 	path := filepath.Join(testutil.TempDir(), fmt.Sprintf("/%d", randPath), "wallet")
+	t.Cleanup(func() {
+		require.NoError(t, os.RemoveAll(path), "Failed to remove directory")
+	})
 
 	exists, err := wallet.Exists(path)
 	require.Equal(t, false, exists)
 	require.NoError(t, err)
-
-	require.NoError(t, os.MkdirAll(path, params.BeaconIoConfig().ReadWriteExecutePermissions), "Failed to create directory")
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(path), "Failed to remove directory")
-	})
+	require.NoError(t, os.MkdirAll(path+"/direct", params.BeaconIoConfig().ReadWriteExecutePermissions), "Failed to create directory")
 
 	exists, err = wallet.Exists(path)
 	require.NoError(t, err)
@@ -133,13 +130,16 @@ func Test_IsValid_RandomFiles(t *testing.T) {
 	randPath, err := rand.Int(rand.Reader, big.NewInt(1000000))
 	require.NoError(t, err, "Could not generate random file path")
 	path := filepath.Join(testutil.TempDir(), fmt.Sprintf("/%d", randPath), "wallet")
+	valid, err := wallet.IsValid(path)
+	require.NoError(t, err)
+	require.Equal(t, false, valid)
 
-	require.NoError(t, os.MkdirAll(path, params.BeaconIoConfig().ReadWriteExecutePermissions), "Failed to create directory")
 	t.Cleanup(func() {
 		require.NoError(t, os.RemoveAll(path), "Failed to remove directory")
 	})
+	require.NoError(t, os.MkdirAll(path, params.BeaconIoConfig().ReadWriteExecutePermissions), "Failed to create directory")
 
-	valid, err := wallet.IsValid(path)
+	valid, err = wallet.IsValid(path)
 	require.ErrorContains(t, "no wallet found at path", err)
 	require.Equal(t, false, valid)
 

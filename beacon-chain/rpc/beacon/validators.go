@@ -74,9 +74,12 @@ func (bs *Server) ListValidatorBalances(
 		pubkeyBytes := bytesutil.ToBytes48(pubKey)
 		index, ok := requestedState.ValidatorIndexByPubkey(pubkeyBytes)
 		if !ok {
-			return nil, status.Errorf(codes.NotFound, "Could not find validator index for public key %#x", pubkeyBytes)
+			// We continue the loop if one validator in the request is not found.
+			res = append(res, &ethpb.ValidatorBalances_Balance{
+				Status: "UNKNOWN",
+			})
+			continue
 		}
-
 		filtered[index] = true
 
 		if index >= uint64(len(balances)) {
@@ -84,10 +87,13 @@ func (bs *Server) ListValidatorBalances(
 				index, len(balances))
 		}
 
+		val := validators[index]
+		st := validatorStatus(val, requestedEpoch)
 		res = append(res, &ethpb.ValidatorBalances_Balance{
 			PublicKey: pubKey,
 			Index:     index,
 			Balance:   balances[index],
+			Status:    st.String(),
 		})
 		balancesCount = len(res)
 	}
@@ -99,10 +105,13 @@ func (bs *Server) ListValidatorBalances(
 		}
 
 		if !filtered[index] {
+			val := validators[index]
+			st := validatorStatus(val, requestedEpoch)
 			res = append(res, &ethpb.ValidatorBalances_Balance{
 				PublicKey: validators[index].PublicKey,
 				Index:     index,
 				Balance:   balances[index],
+				Status:    st.String(),
 			})
 		}
 		balancesCount = len(res)
@@ -136,10 +145,13 @@ func (bs *Server) ListValidatorBalances(
 		// Return everything.
 		for i := start; i < end; i++ {
 			pubkey := requestedState.PubkeyAtIndex(uint64(i))
+			val := validators[i]
+			st := validatorStatus(val, requestedEpoch)
 			res = append(res, &ethpb.ValidatorBalances_Balance{
 				PublicKey: pubkey[:],
 				Index:     uint64(i),
 				Balance:   balances[i],
+				Status:    st.String(),
 			})
 		}
 		return &ethpb.ValidatorBalances{
@@ -259,13 +271,13 @@ func (bs *Server) ListValidators(
 	})
 
 	if len(req.PublicKeys) == 0 && len(req.Indices) == 0 {
-		for i := 0; i < reqState.NumValidators(); i++ {
+		for i := uint64(0); i < uint64(reqState.NumValidators()); i++ {
 			val, err := reqState.ValidatorAtIndex(uint64(i))
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "Could not get validator: %v", err)
 			}
 			validatorList = append(validatorList, &ethpb.Validators_ValidatorContainer{
-				Index:     uint64(i),
+				Index:     i,
 				Validator: val,
 			})
 		}
@@ -345,10 +357,10 @@ func (bs *Server) GetValidator(
 		return headState.ValidatorAtIndex(index)
 	}
 	pk48 := bytesutil.ToBytes48(pubKey)
-	for i := 0; i < headState.NumValidators(); i++ {
-		keyFromState := headState.PubkeyAtIndex(uint64(i))
+	for i := uint64(0); i < uint64(headState.NumValidators()); i++ {
+		keyFromState := headState.PubkeyAtIndex(i)
 		if keyFromState == pk48 {
-			return headState.ValidatorAtIndex(uint64(i))
+			return headState.ValidatorAtIndex(i)
 		}
 	}
 	return nil, status.Error(codes.NotFound, "No validator matched filter criteria")
@@ -833,4 +845,27 @@ func validatorHasExited(validator *ethpb.Validator, currentEpoch uint64) bool {
 		return false
 	}
 	return true
+}
+
+func validatorStatus(validator *ethpb.Validator, epoch uint64) ethpb.ValidatorStatus {
+	farFutureEpoch := params.BeaconConfig().FarFutureEpoch
+	if validator == nil {
+		return ethpb.ValidatorStatus_UNKNOWN_STATUS
+	}
+	if epoch < validator.ActivationEligibilityEpoch {
+		return ethpb.ValidatorStatus_DEPOSITED
+	}
+	if epoch < validator.ActivationEpoch {
+		return ethpb.ValidatorStatus_PENDING
+	}
+	if validator.ExitEpoch == farFutureEpoch {
+		return ethpb.ValidatorStatus_ACTIVE
+	}
+	if epoch < validator.ExitEpoch {
+		if validator.Slashed {
+			return ethpb.ValidatorStatus_SLASHING
+		}
+		return ethpb.ValidatorStatus_EXITING
+	}
+	return ethpb.ValidatorStatus_EXITED
 }

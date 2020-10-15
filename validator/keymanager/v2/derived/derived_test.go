@@ -70,7 +70,7 @@ func TestDerivedKeymanager_CreateAccount(t *testing.T) {
 	}
 	require.NoError(t, dr.initializeKeysCachesFromSeed())
 	ctx := context.Background()
-	_, err := dr.CreateAccount(ctx, true /*logAccountInfo*/)
+	_, _, err := dr.CreateAccount(ctx)
 	require.NoError(t, err)
 
 	// Assert the new value for next account increased and also
@@ -110,7 +110,7 @@ func TestDerivedKeymanager_FetchValidatingPublicKeys(t *testing.T) {
 	numAccounts := 20
 	wantedPublicKeys := make([][48]byte, numAccounts)
 	for i := 0; i < numAccounts; i++ {
-		_, err := dr.CreateAccount(ctx, false /*logAccountInfo*/)
+		_, _, err := dr.CreateAccount(ctx)
 		require.NoError(t, err)
 		validatingKeyPath := fmt.Sprintf(ValidatingKeyDerivationPathTemplate, i)
 		validatingKey, err := util.PrivateKeyFromSeedAndPath(dr.seed, validatingKeyPath)
@@ -125,6 +125,80 @@ func TestDerivedKeymanager_FetchValidatingPublicKeys(t *testing.T) {
 	// therefore the results must be in the same order as the order in which the accounts were derived
 	for i, key := range wantedPublicKeys {
 		assert.Equal(t, key, publicKeys[i])
+	}
+}
+
+func TestDerivedKeymanager_FetchValidatingPrivateKeys(t *testing.T) {
+	wallet := &mock.Wallet{
+		Files:            make(map[string]map[string][]byte),
+		AccountPasswords: make(map[string]string),
+		WalletPassword:   "secretPassw0rd$1999",
+	}
+	dr := &Keymanager{
+		wallet: wallet,
+		seedCfg: &SeedConfig{
+			NextAccount: 0,
+		},
+		seed: make([]byte, 32),
+	}
+	require.NoError(t, dr.initializeKeysCachesFromSeed())
+	// First, generate accounts and their keystore.json files.
+	ctx := context.Background()
+	numAccounts := 20
+	wantedPrivateKeys := make([][32]byte, numAccounts)
+	for i := 0; i < numAccounts; i++ {
+		_, _, err := dr.CreateAccount(ctx)
+		require.NoError(t, err)
+		validatingKeyPath := fmt.Sprintf(ValidatingKeyDerivationPathTemplate, i)
+		validatingKey, err := util.PrivateKeyFromSeedAndPath(dr.seed, validatingKeyPath)
+		require.NoError(t, err)
+		wantedPrivateKeys[i] = bytesutil.ToBytes32(validatingKey.Marshal())
+	}
+	privateKeys, err := dr.FetchValidatingPrivateKeys(ctx)
+	require.NoError(t, err)
+	require.Equal(t, numAccounts, len(privateKeys))
+
+	// FetchValidatingPrivateKeys is also used in generating the output of account list
+	// therefore the results must be in the same order as the order in which the accounts were derived
+	for i, key := range wantedPrivateKeys {
+		assert.Equal(t, key, privateKeys[i])
+	}
+}
+
+func TestDerivedKeymanager_FetchWithdrawalPrivateKeys(t *testing.T) {
+	wallet := &mock.Wallet{
+		Files:            make(map[string]map[string][]byte),
+		AccountPasswords: make(map[string]string),
+		WalletPassword:   "secretPassw0rd$1999",
+	}
+	dr := &Keymanager{
+		wallet: wallet,
+		seedCfg: &SeedConfig{
+			NextAccount: 0,
+		},
+		seed: make([]byte, 32),
+	}
+	require.NoError(t, dr.initializeKeysCachesFromSeed())
+	// First, generate accounts and their keystore.json files.
+	ctx := context.Background()
+	numAccounts := 20
+	wantedPrivateKeys := make([][32]byte, numAccounts)
+	for i := 0; i < numAccounts; i++ {
+		_, _, err := dr.CreateAccount(ctx)
+		require.NoError(t, err)
+		withdrawalKeyPath := fmt.Sprintf(WithdrawalKeyDerivationPathTemplate, i)
+		withdrawalKey, err := util.PrivateKeyFromSeedAndPath(dr.seed, withdrawalKeyPath)
+		require.NoError(t, err)
+		wantedPrivateKeys[i] = bytesutil.ToBytes32(withdrawalKey.Marshal())
+	}
+	privateKeys, err := dr.FetchWithdrawalPrivateKeys(ctx)
+	require.NoError(t, err)
+	require.Equal(t, numAccounts, len(privateKeys))
+
+	// FetchWithdrawalPrivateKeys is also used in generating the output of account list
+	// therefore the results must be in the same order as the order in which the accounts were derived
+	for i, key := range wantedPrivateKeys {
+		assert.Equal(t, key, privateKeys[i])
 	}
 }
 
@@ -149,7 +223,7 @@ func TestDerivedKeymanager_Sign(t *testing.T) {
 	numAccounts := 2
 	ctx := context.Background()
 	for i := 0; i < numAccounts; i++ {
-		_, err := dr.CreateAccount(ctx, false /*logAccountInfo*/)
+		_, _, err := dr.CreateAccount(ctx)
 		require.NoError(t, err)
 	}
 	publicKeys, err := dr.FetchValidatingPublicKeys(ctx)
@@ -215,7 +289,7 @@ func TestDerivedKeymanager_RefreshWalletPassword(t *testing.T) {
 	numAccounts := 2
 	ctx := context.Background()
 	for i := 0; i < numAccounts; i++ {
-		_, err := dr.CreateAccount(ctx, false /*logAccountInfo*/)
+		_, _, err := dr.CreateAccount(ctx)
 		require.NoError(t, err)
 	}
 
