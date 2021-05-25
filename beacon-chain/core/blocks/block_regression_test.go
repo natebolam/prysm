@@ -4,9 +4,11 @@ import (
 	"context"
 	"testing"
 
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
+	v "github.com/prysmaticlabs/prysm/beacon-chain/core/validators"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
@@ -18,7 +20,7 @@ func TestProcessAttesterSlashings_RegressionSlashableIndices(t *testing.T) {
 	testutil.ResetCache()
 	beaconState, privKeys := testutil.DeterministicGenesisState(t, 5500)
 	for _, vv := range beaconState.Validators() {
-		vv.WithdrawableEpoch = 1 * params.BeaconConfig().SlotsPerEpoch
+		vv.WithdrawableEpoch = types.Epoch(params.BeaconConfig().SlotsPerEpoch)
 	}
 	// This set of indices is very similar to the one from our sapphire testnet
 	// when close to 100 validators were incorrectly slashed. The set is from 0 -5500,
@@ -38,11 +40,7 @@ func TestProcessAttesterSlashings_RegressionSlashableIndices(t *testing.T) {
 
 	root1 := [32]byte{'d', 'o', 'u', 'b', 'l', 'e', '1'}
 	att1 := &ethpb.IndexedAttestation{
-		Data: &ethpb.AttestationData{
-			Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
-			Target:          &ethpb.Checkpoint{Epoch: 0, Root: root1[:]},
-			BeaconBlockRoot: make([]byte, 32),
-		},
+		Data:             testutil.HydrateAttestationData(&ethpb.AttestationData{Target: &ethpb.Checkpoint{Epoch: 0, Root: root1[:]}}),
 		AttestingIndices: setA,
 		Signature:        make([]byte, 96),
 	}
@@ -60,11 +58,9 @@ func TestProcessAttesterSlashings_RegressionSlashableIndices(t *testing.T) {
 
 	root2 := [32]byte{'d', 'o', 'u', 'b', 'l', 'e', '2'}
 	att2 := &ethpb.IndexedAttestation{
-		Data: &ethpb.AttestationData{
-			Source:          &ethpb.Checkpoint{Epoch: 0, Root: make([]byte, 32)},
-			Target:          &ethpb.Checkpoint{Epoch: 0, Root: root2[:]},
-			BeaconBlockRoot: make([]byte, 32),
-		},
+		Data: testutil.HydrateAttestationData(&ethpb.AttestationData{
+			Target: &ethpb.Checkpoint{Root: root2[:]},
+		}),
 		AttestingIndices: setB,
 		Signature:        make([]byte, 96),
 	}
@@ -95,7 +91,7 @@ func TestProcessAttesterSlashings_RegressionSlashableIndices(t *testing.T) {
 		},
 	}
 
-	newState, err := blocks.ProcessAttesterSlashings(context.Background(), beaconState, b)
+	newState, err := blocks.ProcessAttesterSlashings(context.Background(), beaconState, b.Block.Body.AttesterSlashings, v.SlashValidator)
 	require.NoError(t, err)
 	newRegistry := newState.Validators()
 	if !newRegistry[expectedSlashedVal].Slashed {

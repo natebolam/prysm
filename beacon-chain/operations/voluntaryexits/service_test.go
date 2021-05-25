@@ -6,18 +6,17 @@ import (
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	beaconstate "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateV0"
 	p2ppb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 )
 
 func TestPool_InsertVoluntaryExit(t *testing.T) {
 	type fields struct {
-		pending  []*ethpb.SignedVoluntaryExit
-		included map[uint64]bool
+		pending []*ethpb.SignedVoluntaryExit
 	}
 	type args struct {
 		exit *ethpb.SignedVoluntaryExit
@@ -29,10 +28,31 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 		want   []*ethpb.SignedVoluntaryExit
 	}{
 		{
+			name: "Prevent inserting nil exit",
+			fields: fields{
+				pending: make([]*ethpb.SignedVoluntaryExit, 0),
+			},
+			args: args{
+				exit: nil,
+			},
+			want: []*ethpb.SignedVoluntaryExit{},
+		},
+		{
+			name: "Prevent inserting malformed exit",
+			fields: fields{
+				pending: make([]*ethpb.SignedVoluntaryExit, 0),
+			},
+			args: args{
+				exit: &ethpb.SignedVoluntaryExit{
+					Exit: nil,
+				},
+			},
+			want: []*ethpb.SignedVoluntaryExit{},
+		},
+		{
 			name: "Empty list",
 			fields: fields{
-				pending:  make([]*ethpb.SignedVoluntaryExit, 0),
-				included: make(map[uint64]bool),
+				pending: make([]*ethpb.SignedVoluntaryExit, 0),
 			},
 			args: args{
 				exit: &ethpb.SignedVoluntaryExit{
@@ -62,7 +82,6 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 						},
 					},
 				},
-				included: make(map[uint64]bool),
 			},
 			args: args{
 				exit: &ethpb.SignedVoluntaryExit{
@@ -82,7 +101,7 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 			},
 		},
 		{
-			name: "Duplicate exit with lower epoch",
+			name: "Duplicate exit in pending list",
 			fields: fields{
 				pending: []*ethpb.SignedVoluntaryExit{
 					{
@@ -92,12 +111,11 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 						},
 					},
 				},
-				included: make(map[uint64]bool),
 			},
 			args: args{
 				exit: &ethpb.SignedVoluntaryExit{
 					Exit: &ethpb.VoluntaryExit{
-						Epoch:          10,
+						Epoch:          12,
 						ValidatorIndex: 1,
 					},
 				},
@@ -105,7 +123,65 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 			want: []*ethpb.SignedVoluntaryExit{
 				{
 					Exit: &ethpb.VoluntaryExit{
-						Epoch:          10,
+						Epoch:          12,
+						ValidatorIndex: 1,
+					},
+				},
+			},
+		},
+		{
+			name: "Duplicate validator index",
+			fields: fields{
+				pending: []*ethpb.SignedVoluntaryExit{
+					{
+						Exit: &ethpb.VoluntaryExit{
+							Epoch:          12,
+							ValidatorIndex: 1,
+						},
+					},
+				},
+			},
+			args: args{
+				exit: &ethpb.SignedVoluntaryExit{
+					Exit: &ethpb.VoluntaryExit{
+						Epoch:          20,
+						ValidatorIndex: 1,
+					},
+				},
+			},
+			want: []*ethpb.SignedVoluntaryExit{
+				{
+					Exit: &ethpb.VoluntaryExit{
+						Epoch:          12,
+						ValidatorIndex: 1,
+					},
+				},
+			},
+		},
+		{
+			name: "Duplicate received with more favorable exit epoch",
+			fields: fields{
+				pending: []*ethpb.SignedVoluntaryExit{
+					{
+						Exit: &ethpb.VoluntaryExit{
+							Epoch:          12,
+							ValidatorIndex: 1,
+						},
+					},
+				},
+			},
+			args: args{
+				exit: &ethpb.SignedVoluntaryExit{
+					Exit: &ethpb.VoluntaryExit{
+						Epoch:          4,
+						ValidatorIndex: 1,
+					},
+				},
+			},
+			want: []*ethpb.SignedVoluntaryExit{
+				{
+					Exit: &ethpb.VoluntaryExit{
+						Epoch:          4,
 						ValidatorIndex: 1,
 					},
 				},
@@ -114,8 +190,7 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 		{
 			name: "Exit for already exited validator",
 			fields: fields{
-				pending:  []*ethpb.SignedVoluntaryExit{},
-				included: make(map[uint64]bool),
+				pending: []*ethpb.SignedVoluntaryExit{},
 			},
 			args: args{
 				exit: &ethpb.SignedVoluntaryExit{
@@ -144,7 +219,6 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 						},
 					},
 				},
-				included: make(map[uint64]bool),
 			},
 			args: args{
 				exit: &ethpb.SignedVoluntaryExit{
@@ -175,24 +249,6 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 				},
 			},
 		},
-		{
-			name: "Already included",
-			fields: fields{
-				pending: make([]*ethpb.SignedVoluntaryExit, 0),
-				included: map[uint64]bool{
-					1: true,
-				},
-			},
-			args: args{
-				exit: &ethpb.SignedVoluntaryExit{
-					Exit: &ethpb.VoluntaryExit{
-						Epoch:          12,
-						ValidatorIndex: 1,
-					},
-				},
-			},
-			want: []*ethpb.SignedVoluntaryExit{},
-		},
 	}
 	ctx := context.Background()
 	validators := []*ethpb.Validator{
@@ -212,10 +268,9 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Pool{
-				pending:  tt.fields.pending,
-				included: tt.fields.included,
+				pending: tt.fields.pending,
 			}
-			s, err := beaconstate.InitializeFromProtoUnsafe(&p2ppb.BeaconState{Validators: validators})
+			s, err := stateV0.InitializeFromProtoUnsafe(&p2ppb.BeaconState{Validators: validators})
 			require.NoError(t, err)
 			p.InsertVoluntaryExit(ctx, s, tt.args.exit)
 			if len(p.pending) != len(tt.want) {
@@ -232,8 +287,7 @@ func TestPool_InsertVoluntaryExit(t *testing.T) {
 
 func TestPool_MarkIncluded(t *testing.T) {
 	type fields struct {
-		pending  []*ethpb.SignedVoluntaryExit
-		included map[uint64]bool
+		pending []*ethpb.SignedVoluntaryExit
 	}
 	type args struct {
 		exit *ethpb.SignedVoluntaryExit
@@ -244,32 +298,6 @@ func TestPool_MarkIncluded(t *testing.T) {
 		args   args
 		want   fields
 	}{
-		{
-			name: "Included, does not exist in pending",
-			fields: fields{
-				pending: []*ethpb.SignedVoluntaryExit{
-					{
-						Exit: &ethpb.VoluntaryExit{ValidatorIndex: 2},
-					},
-				},
-				included: make(map[uint64]bool),
-			},
-			args: args{
-				exit: &ethpb.SignedVoluntaryExit{
-					Exit: &ethpb.VoluntaryExit{ValidatorIndex: 3},
-				},
-			},
-			want: fields{
-				pending: []*ethpb.SignedVoluntaryExit{
-					{
-						Exit: &ethpb.VoluntaryExit{ValidatorIndex: 2},
-					},
-				},
-				included: map[uint64]bool{
-					3: true,
-				},
-			},
-		},
 		{
 			name: "Removes from pending list",
 			fields: fields{
@@ -283,9 +311,6 @@ func TestPool_MarkIncluded(t *testing.T) {
 					{
 						Exit: &ethpb.VoluntaryExit{ValidatorIndex: 3},
 					},
-				},
-				included: map[uint64]bool{
-					0: true,
 				},
 			},
 			args: args{
@@ -302,18 +327,13 @@ func TestPool_MarkIncluded(t *testing.T) {
 						Exit: &ethpb.VoluntaryExit{ValidatorIndex: 3},
 					},
 				},
-				included: map[uint64]bool{
-					0: true,
-					2: true,
-				},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := &Pool{
-				pending:  tt.fields.pending,
-				included: tt.fields.included,
+				pending: tt.fields.pending,
 			}
 			p.MarkIncluded(tt.args.exit)
 			if len(p.pending) != len(tt.want.pending) {
@@ -324,7 +344,6 @@ func TestPool_MarkIncluded(t *testing.T) {
 					t.Errorf("Pending exit at index %d does not match expected. Got=%v wanted=%v", i, p.pending[i], tt.want.pending[i])
 				}
 			}
-			assert.DeepEqual(t, tt.want.included, p.included)
 		})
 	}
 }
@@ -335,7 +354,7 @@ func TestPool_PendingExits(t *testing.T) {
 		noLimit bool
 	}
 	type args struct {
-		slot uint64
+		slot types.Slot
 	}
 	tests := []struct {
 		name   string
@@ -502,7 +521,7 @@ func TestPool_PendingExits(t *testing.T) {
 			p := &Pool{
 				pending: tt.fields.pending,
 			}
-			s, err := beaconstate.InitializeFromProtoUnsafe(&p2ppb.BeaconState{Validators: []*ethpb.Validator{{ExitEpoch: params.BeaconConfig().FarFutureEpoch}}})
+			s, err := stateV0.InitializeFromProtoUnsafe(&p2ppb.BeaconState{Validators: []*ethpb.Validator{{ExitEpoch: params.BeaconConfig().FarFutureEpoch}}})
 			require.NoError(t, err)
 			if got := p.PendingExits(s, tt.args.slot, tt.fields.noLimit); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("PendingExits() = %v, want %v", got, tt.want)

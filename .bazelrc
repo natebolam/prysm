@@ -17,9 +17,12 @@ test --host_force_python=PY2
 run --host_force_python=PY2
 
 # Networking is blocked for tests by default, add "requires-network" tag to your test if networking
-# is required within the sandbox. This flag is no longer experimental after 0.29.0.
-# Network sandboxing only works on linux.
---experimental_sandbox_default_allow_network=false
+# is required within the sandbox. Network sandboxing only works on linux.
+build --sandbox_default_allow_network=false
+
+# Stamp binaries with git information
+build --workspace_status_command=./scripts/workspace_status.sh
+build --stamp
 
 # Use mainnet protobufs at runtime
 run --define ssz=mainnet
@@ -36,20 +39,17 @@ build --define kafka_enabled=false
 test --define kafka_enabled=false
 run --define kafka_enabled=false
 
-# Enable blst by default, we use a config so that our fuzzer stops complaining.
-build --config=blst_enabled
-test --config=blst_enabled
-run --config=blst_enabled
+build --define blst_disabled=false
+test --define blst_disabled=false
+run --define blst_disabled=false
 
 build:kafka_enabled --define kafka_enabled=true
 build:kafka_enabled --define gotags=kafka_enabled
 
-build:blst_enabled --define blst_enabled=true
-build:blst_enabled --define gotags=blst_enabled
+build:blst_disabled --define blst_disabled=true
+build:blst_disabled --define gotags=blst_disabled
 
 # Release flags
-build:release --workspace_status_command=./scripts/workspace_status.sh
-build:release --stamp
 build:release --compilation_mode=opt
 build:release --config=llvm
 
@@ -83,7 +83,7 @@ build:fuzz --linkopt -Wl,--no-as-needed
 build:fuzz --define=gc_goopts=-d=libfuzzer,checkptr
 build:fuzz --run_under=//tools:fuzz_wrapper
 build:fuzz --compilation_mode=opt
-build:fuzz --define=blst_enabled=false
+build:fuzz --define=blst_disabled=true
 
 test:fuzz --local_test_jobs="HOST_CPUS*.5"
 
@@ -237,3 +237,6 @@ build:remote --remote_timeout=3600
 build:remote --experimental_remote_download_outputs=toplevel --experimental_inmemory_jdeps_files --experimental_inmemory_dotd_files
 
 build:remote --remote_local_fallback
+
+# Ignore GoStdLib with remote caching
+build --modify_execution_info='GoStdlib.*=+no-remote-cache'

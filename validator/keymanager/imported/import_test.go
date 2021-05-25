@@ -13,14 +13,18 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	mock "github.com/prysmaticlabs/prysm/validator/accounts/testing"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
+	logTest "github.com/sirupsen/logrus/hooks/test"
 	keystorev4 "github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4"
 )
+
+const password = "secretPassw0rd$1999"
 
 func createRandomKeystore(t testing.TB, password string) *keymanager.Keystore {
 	encryptor := keystorev4.New()
 	id, err := uuid.NewRandom()
 	require.NoError(t, err)
-	validatingKey := bls.RandKey()
+	validatingKey, err := bls.RandKey()
+	require.NoError(t, err)
 	pubKey := validatingKey.PublicKey().Marshal()
 	cryptoFields, err := encryptor.Encrypt(validatingKey.Marshal(), password)
 	require.NoError(t, err)
@@ -38,7 +42,8 @@ func TestImportedKeymanager_CreateAccountsKeystore_NoDuplicates(t *testing.T) {
 	pubKeys := make([][]byte, numKeys)
 	privKeys := make([][]byte, numKeys)
 	for i := 0; i < numKeys; i++ {
-		priv := bls.RandKey()
+		priv, err := bls.RandKey()
+		require.NoError(t, err)
 		privKeys[i] = priv.Marshal()
 		pubKeys[i] = priv.PublicKey().Marshal()
 	}
@@ -49,7 +54,7 @@ func TestImportedKeymanager_CreateAccountsKeystore_NoDuplicates(t *testing.T) {
 		wallet: wallet,
 	}
 	ctx := context.Background()
-	_, err := dr.createAccountsKeystore(ctx, privKeys, pubKeys)
+	_, err := dr.CreateAccountsKeystore(ctx, privKeys, pubKeys)
 	require.NoError(t, err)
 
 	// We expect the 50 keys in the account store to match.
@@ -62,7 +67,7 @@ func TestImportedKeymanager_CreateAccountsKeystore_NoDuplicates(t *testing.T) {
 	}
 
 	// Re-run the create accounts keystore function with the same pubkeys.
-	_, err = dr.createAccountsKeystore(ctx, privKeys, pubKeys)
+	_, err = dr.CreateAccountsKeystore(ctx, privKeys, pubKeys)
 	require.NoError(t, err)
 
 	// We expect nothing to change.
@@ -76,11 +81,12 @@ func TestImportedKeymanager_CreateAccountsKeystore_NoDuplicates(t *testing.T) {
 
 	// Now, we run the function again but with a new priv and pubkey and this
 	// time, we do expect a change.
-	privKey := bls.RandKey()
+	privKey, err := bls.RandKey()
+	require.NoError(t, err)
 	privKeys = append(privKeys, privKey.Marshal())
 	pubKeys = append(pubKeys, privKey.PublicKey().Marshal())
 
-	_, err = dr.createAccountsKeystore(ctx, privKeys, pubKeys)
+	_, err = dr.CreateAccountsKeystore(ctx, privKeys, pubKeys)
 	require.NoError(t, err)
 	require.Equal(t, len(dr.accountsStore.PublicKeys), len(dr.accountsStore.PrivateKeys))
 
@@ -89,7 +95,6 @@ func TestImportedKeymanager_CreateAccountsKeystore_NoDuplicates(t *testing.T) {
 }
 
 func TestImportedKeymanager_ImportKeystores(t *testing.T) {
-	password := "secretPassw0rd$1999"
 	// Setup the keymanager.
 	wallet := &mock.Wallet{
 		Files:          make(map[string]map[string][]byte),
@@ -97,10 +102,10 @@ func TestImportedKeymanager_ImportKeystores(t *testing.T) {
 	}
 	dr := &Keymanager{
 		wallet:        wallet,
-		accountsStore: &AccountStore{},
+		accountsStore: &accountStore{},
 	}
 
-	// Create a duplicate keystore and attempt to import it.
+	// Create a duplicate keystore and attempt to import it. This should complete correctly though log specific output.
 	numAccounts := 5
 	keystores := make([]*keymanager.Keystore, numAccounts+1)
 	for i := 1; i < numAccounts+1; i++ {
@@ -108,12 +113,14 @@ func TestImportedKeymanager_ImportKeystores(t *testing.T) {
 	}
 	keystores[0] = keystores[1]
 	ctx := context.Background()
-	require.ErrorContains(t, "duplicated key found:", dr.ImportKeystores(
+	hook := logTest.NewGlobal()
+	require.NoError(t, dr.ImportKeystores(
 		ctx,
 		keystores,
 		password,
 	))
-	// Import them correctly without the duplicate.
+	require.LogsContain(t, hook, "Duplicate key")
+	// Import them correctly even without the duplicate.
 	require.NoError(t, dr.ImportKeystores(
 		ctx,
 		keystores[1:],
@@ -136,7 +143,7 @@ func TestImportedKeymanager_ImportKeystores(t *testing.T) {
 	decryptor := keystorev4.New()
 	encodedAccounts, err := decryptor.Decrypt(keystoreFile.Crypto, password)
 	require.NoError(t, err, "Could not decrypt validator accounts")
-	store := &AccountStore{}
+	store := &accountStore{}
 	require.NoError(t, json.Unmarshal(encodedAccounts, store))
 
 	// We should have successfully imported all accounts

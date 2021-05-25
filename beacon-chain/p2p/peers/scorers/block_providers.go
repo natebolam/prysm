@@ -1,19 +1,20 @@
 package scorers
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"sort"
 	"time"
 
 	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/peers/peerdata"
+	"github.com/prysmaticlabs/prysm/cmd/beacon-chain/flags"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/rand"
 	"github.com/prysmaticlabs/prysm/shared/timeutils"
 )
+
+var _ Scorer = (*BlockProviderScorer)(nil)
 
 const (
 	// DefaultBlockProviderProcessedBatchWeight is a default reward weight of a processed batch of blocks.
@@ -35,7 +36,6 @@ const (
 
 // BlockProviderScorer represents block provider scoring service.
 type BlockProviderScorer struct {
-	ctx    context.Context
 	config *BlockProviderScorerConfig
 	store  *peerdata.Store
 	// maxScore is a cached value for maximum attainable block provider score.
@@ -62,13 +62,11 @@ type BlockProviderScorerConfig struct {
 }
 
 // newBlockProviderScorer creates block provider scoring service.
-func newBlockProviderScorer(
-	ctx context.Context, store *peerdata.Store, config *BlockProviderScorerConfig) *BlockProviderScorer {
+func newBlockProviderScorer(store *peerdata.Store, config *BlockProviderScorerConfig) *BlockProviderScorer {
 	if config == nil {
 		config = &BlockProviderScorerConfig{}
 	}
 	scorer := &BlockProviderScorer{
-		ctx:    ctx,
 		config: config,
 		store:  store,
 	}
@@ -174,6 +172,20 @@ func (s *BlockProviderScorer) processedBlocks(pid peer.ID) uint64 {
 		return peerData.ProcessedBlocks
 	}
 	return 0
+}
+
+// IsBadPeer states if the peer is to be considered bad.
+// Block provider scorer cannot guarantee that lower score of a peer is indeed a sign of a bad peer.
+// Therefore this scorer never marks peers as bad, and relies on scores to probabilistically sort
+// out low-scorers (see WeightSorted method).
+func (s *BlockProviderScorer) IsBadPeer(_ peer.ID) bool {
+	return false
+}
+
+// BadPeers returns the peers that are considered bad.
+// No peers are considered bad by block providers scorer.
+func (s *BlockProviderScorer) BadPeers() []peer.ID {
+	return []peer.ID{}
 }
 
 // Decay updates block provider counters by decaying them.

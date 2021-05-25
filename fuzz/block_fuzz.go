@@ -13,23 +13,21 @@ import (
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pubsub_pb "github.com/libp2p/go-libp2p-pubsub/pb"
-	"github.com/prysmaticlabs/go-ssz"
-
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain"
 	"github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
-	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/state"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
+	beaconkv "github.com/prysmaticlabs/prysm/beacon-chain/db/kv"
 	"github.com/prysmaticlabs/prysm/beacon-chain/forkchoice/protoarray"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/attestations"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/slashings"
 	"github.com/prysmaticlabs/prysm/beacon-chain/operations/voluntaryexits"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	p2pt "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
-	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	powt "github.com/prysmaticlabs/prysm/beacon-chain/powchain/testing"
+	"github.com/prysmaticlabs/prysm/beacon-chain/state/stateV0"
 	"github.com/prysmaticlabs/prysm/beacon-chain/state/stategen"
 	"github.com/prysmaticlabs/prysm/beacon-chain/sync"
-	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/rand"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
@@ -39,7 +37,6 @@ import (
 const topic = p2p.BlockSubnetTopicFormat
 
 var db1 db.Database
-var ssc *cache.StateSummaryCache
 var dbPath = path.Join(os.TempDir(), "fuzz_beacondb", randomHex(6))
 
 func randomHex(n int) string {
@@ -51,16 +48,12 @@ func randomHex(n int) string {
 }
 
 func init() {
-	featureconfig.Init(&featureconfig.Flags{SkipBLSVerify: true})
-
 	logrus.SetLevel(logrus.PanicLevel)
 	logrus.SetOutput(ioutil.Discard)
 
-	ssc = cache.NewStateSummaryCache()
-
 	var err error
 
-	db1, err = db.NewDB(dbPath, ssc)
+	db1, err = db.NewDB(context.Background(), dbPath, &beaconkv.Config{})
 	if err != nil {
 		panic(err)
 	}
@@ -72,12 +65,15 @@ func setupDB() {
 	}
 
 	ctx := context.Background()
-	s := testutil.NewBeaconState()
+	s, err := testutil.NewBeaconState()
+	if err != nil {
+		panic(err)
+	}
 	b := testutil.NewBeaconBlock()
 	if err := db1.SaveBlock(ctx, b); err != nil {
 		panic(err)
 	}
-	br, err := ssz.HashTreeRoot(b)
+	br, err := b.HashTreeRoot()
 	if err != nil {
 		panic(err)
 	}
@@ -94,12 +90,20 @@ type fakeChecker struct{}
 func (fakeChecker) Syncing() bool {
 	return false
 }
+func (fakeChecker) Initialized() bool {
+	return false
+}
 func (fakeChecker) Status() error {
 	return nil
 }
-
 func (fakeChecker) Resync() error {
 	return nil
+}
+
+// FuzzBlock wraps BeaconFuzzBlock in a go-fuzz compatible interface
+func FuzzBlock(b []byte) int {
+	BeaconFuzzBlock(b)
+	return 0
 }
 
 // BeaconFuzzBlock runs full processing of beacon block against a given state.
@@ -109,7 +113,7 @@ func BeaconFuzzBlock(b []byte) {
 	if err := input.UnmarshalSSZ(b); err != nil {
 		return
 	}
-	st, err := stateTrie.InitializeFromProtoUnsafe(input.State)
+	st, err := stateV0.InitializeFromProtoUnsafe(input.State)
 	if err != nil {
 		return
 	}
@@ -117,7 +121,7 @@ func BeaconFuzzBlock(b []byte) {
 	setupDB()
 
 	p2p := p2pt.NewFuzzTestP2P()
-	sgen := stategen.New(db1, ssc)
+	sgen := stategen.New(db1)
 	sn := &testing.MockStateNotifier{}
 	bn := &testing.MockBlockNotifier{}
 	an := &testing.MockOperationNotifier{}
@@ -130,7 +134,7 @@ func BeaconFuzzBlock(b []byte) {
 	}
 
 	chain, err := blockchain.NewService(context.Background(), &blockchain.Config{
-		ChainStartFetcher: nil,
+		ChainStartFetcher: powt.NewPOWChain(),
 		BeaconDB:          db1,
 		DepositCache:      nil,
 		AttPool:           ap,
@@ -158,7 +162,6 @@ func BeaconFuzzBlock(b []byte) {
 		AttPool:             ap,
 		ExitPool:            ep,
 		SlashingPool:        sp,
-		StateSummaryCache:   ssc,
 		StateGen:            sgen,
 	})
 

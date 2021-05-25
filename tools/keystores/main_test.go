@@ -1,12 +1,10 @@
 package main
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,13 +13,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/prysmaticlabs/prysm/shared/testutil"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
 	"github.com/urfave/cli/v2"
 	keystorev4 "github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4"
 )
+
+const password = "secretPassw0rd$1999"
 
 type cliConfig struct {
 	keystoresPath string
@@ -51,7 +50,8 @@ func createRandomKeystore(t testing.TB, password string) (*keymanager.Keystore, 
 	encryptor := keystorev4.New()
 	id, err := uuid.NewRandom()
 	require.NoError(t, err)
-	validatingKey := bls.RandKey()
+	validatingKey, err := bls.RandKey()
+	require.NoError(t, err)
 	pubKey := validatingKey.PublicKey().Marshal()
 	cryptoFields, err := encryptor.Encrypt(validatingKey.Marshal(), password)
 	require.NoError(t, err)
@@ -65,19 +65,13 @@ func createRandomKeystore(t testing.TB, password string) (*keymanager.Keystore, 
 }
 
 func setupRandomDir(t testing.TB) string {
-	randPath, err := rand.Int(rand.Reader, big.NewInt(1000000))
-	require.NoError(t, err)
-	randDir := filepath.Join(testutil.TempDir(), fmt.Sprintf("/%d", randPath))
+	randDir := t.TempDir()
 	require.NoError(t, os.MkdirAll(randDir, os.ModePerm))
-	t.Cleanup(func() {
-		require.NoError(t, os.RemoveAll(randDir), "Failed to remove directory")
-	})
 	return randDir
 }
 
 func TestDecrypt(t *testing.T) {
 	keystoresDir := setupRandomDir(t)
-	password := "secretPassw0rd$1999"
 	keystore, privKey := createRandomKeystore(t, password)
 	// We write a random keystore to a keystores directory.
 	encodedKeystore, err := json.MarshalIndent(keystore, "", "\t")
@@ -116,9 +110,9 @@ func TestDecrypt(t *testing.T) {
 
 func TestEncrypt(t *testing.T) {
 	keystoresDir := setupRandomDir(t)
-	password := "secretPassw0rd$1999"
 	keystoreFilePath := filepath.Join(keystoresDir, "keystore.json")
-	privKey := bls.RandKey()
+	privKey, err := bls.RandKey()
+	require.NoError(t, err)
 
 	cliCtx := setupCliContext(t, &cliConfig{
 		outputPath: keystoreFilePath,

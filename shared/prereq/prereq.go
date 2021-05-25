@@ -34,7 +34,7 @@ func execShellOutputFunc(ctx context.Context, command string, args ...string) (s
 	return string(result), nil
 }
 
-func getSupportedPlatforms() []platform {
+func supportedPlatforms() []platform {
 	return []platform{
 		{os: "linux", arch: "amd64"},
 		{os: "linux", arch: "arm64"},
@@ -66,7 +66,7 @@ func parseVersion(input string, num int, sep string) ([]int, error) {
 
 // meetsMinPlatformReqs returns true if the runtime matches any on the list of supported platforms
 func meetsMinPlatformReqs(ctx context.Context) (bool, error) {
-	okPlatforms := getSupportedPlatforms()
+	okPlatforms := supportedPlatforms()
 	for _, platform := range okPlatforms {
 		if runtimeOS == platform.os && runtimeArch == platform.arch {
 			// If MacOS we make sure it meets the minimum version cutoff
@@ -94,8 +94,8 @@ func meetsMinPlatformReqs(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// WarnIfNotSupported warns if the user's platform is not supported or if it fails to detect user's platform
-func WarnIfNotSupported(ctx context.Context) {
+// WarnIfPlatformNotSupported warns if the user's platform is not supported or if it fails to detect user's platform
+func WarnIfPlatformNotSupported(ctx context.Context) {
 	supported, err := meetsMinPlatformReqs(ctx)
 	if err != nil {
 		log.Warnf("Failed to detect host platform:  %v", err)

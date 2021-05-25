@@ -10,6 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/multiformats/go-multiaddr"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/encoder"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p/peers"
@@ -51,7 +52,8 @@ type PubSubTopicUser interface {
 
 // ConnectionHandler configures p2p to handle connections with a peer.
 type ConnectionHandler interface {
-	AddConnectionHandler(f func(ctx context.Context, id peer.ID) error)
+	AddConnectionHandler(f func(ctx context.Context, id peer.ID) error,
+		j func(ctx context.Context, id peer.ID) error)
 	AddDisconnectionHandler(f func(ctx context.Context, id peer.ID) error)
 	connmgr.ConnectionGater
 }
@@ -72,8 +74,9 @@ type PeerManager interface {
 	PeerID() peer.ID
 	Host() host.Host
 	ENR() *enr.Record
+	DiscoveryAddresses() ([]multiaddr.Multiaddr, error)
 	RefreshENR()
-	FindPeersWithSubnet(ctx context.Context, index uint64) (bool, error)
+	FindPeersWithSubnet(ctx context.Context, topic string, index, threshold uint64) (bool, error)
 	AddPingMethod(reqFunc func(ctx context.Context, id peer.ID) error)
 }
 

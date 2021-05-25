@@ -4,15 +4,21 @@ import (
 	"context"
 	"fmt"
 	"io/ioutil"
+	"math"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
+	types "github.com/prysmaticlabs/eth2-types"
+	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	validatorpb "github.com/prysmaticlabs/prysm/proto/validator/accounts/v2"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/event"
+	"github.com/prysmaticlabs/prysm/shared/mock"
 	"github.com/prysmaticlabs/prysm/shared/petnames"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
@@ -21,6 +27,7 @@ import (
 	"github.com/prysmaticlabs/prysm/validator/keymanager/derived"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/imported"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/remote"
+	constant "github.com/prysmaticlabs/prysm/validator/testing"
 	keystorev4 "github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4"
 )
 
@@ -37,11 +44,16 @@ func (m *mockRemoteKeymanager) Sign(context.Context, *validatorpb.SignRequest) (
 	return nil, nil
 }
 
+func (m *mockRemoteKeymanager) SubscribeAccountChanges(_ chan [][48]byte) event.Subscription {
+	return nil
+}
+
 func createRandomKeystore(t testing.TB, password string) *keymanager.Keystore {
 	encryptor := keystorev4.New()
 	id, err := uuid.NewRandom()
 	require.NoError(t, err)
-	validatingKey := bls.RandKey()
+	validatingKey, err := bls.RandKey()
+	require.NoError(t, err)
 	pubKey := validatingKey.PublicKey().Marshal()
 	cryptoFields, err := encryptor.Encrypt(validatingKey.Marshal(), password)
 	require.NoError(t, err)
@@ -73,8 +85,8 @@ func TestListAccounts_ImportedKeymanager(t *testing.T) {
 	km, err := imported.NewKeymanager(
 		cliCtx.Context,
 		&imported.SetupConfig{
-			Wallet: w,
-			Opts:   imported.DefaultKeymanagerOpts(),
+			Wallet:           w,
+			ListenForChanges: false,
 		},
 	)
 	require.NoError(t, err)
@@ -227,22 +239,15 @@ func TestListAccounts_DerivedKeymanager(t *testing.T) {
 	keymanager, err := derived.NewKeymanager(
 		cliCtx.Context,
 		&derived.SetupConfig{
-			Opts:                derived.DefaultKeymanagerOpts(),
-			Wallet:              w,
-			SkipMnemonicConfirm: true,
+			Wallet:           w,
+			ListenForChanges: false,
 		},
 	)
 	require.NoError(t, err)
 
 	numAccounts := 5
-	depositDataForAccounts := make([][]byte, numAccounts)
-	for i := 0; i < numAccounts; i++ {
-		_, _, err := keymanager.CreateAccount(cliCtx.Context)
-		require.NoError(t, err)
-		enc, err := keymanager.DepositDataForAccount(uint64(i))
-		require.NoError(t, err)
-		depositDataForAccounts[i] = enc
-	}
+	err = keymanager.RecoverAccountsFromMnemonic(cliCtx.Context, constant.TestMnemonic, "", numAccounts)
+	require.NoError(t, err)
 
 	rescueStdout := os.Stdout
 	r, writer, err := os.Pipe()
@@ -250,7 +255,7 @@ func TestListAccounts_DerivedKeymanager(t *testing.T) {
 	os.Stdout = writer
 
 	// We call the list imported keymanager accounts function.
-	require.NoError(t, listDerivedKeymanagerAccounts(cliCtx.Context, true /* show deposit data */, true /*show private keys */, keymanager))
+	require.NoError(t, listDerivedKeymanagerAccounts(cliCtx.Context, true, keymanager))
 
 	require.NoError(t, writer.Close())
 	out, err := ioutil.ReadAll(r)
@@ -300,13 +305,11 @@ func TestListAccounts_DerivedKeymanager(t *testing.T) {
 
 	// Expected output format definition
 	const prologLength = 3
-	const accountLength = 14
+	const accountLength = 6
 	const epilogLength = 1
 	const nameOffset = 1
-	const keyOffset = 5
-	const validatingPrivateKeyOffset = 6
-	const withdrawalPrivateKeyOffset = 3
-	const depositOffset = 11
+	const keyOffset = 2
+	const validatingPrivateKeyOffset = 3
 
 	// Require the output has correct number of lines
 	lineCount := prologLength + accountLength*numAccounts + epilogLength
@@ -354,27 +357,6 @@ func TestListAccounts_DerivedKeymanager(t *testing.T) {
 		keyFound := strings.Contains(lines[lineNumber], keyString)
 		assert.Equal(t, true, keyFound, "Validating Private Key %s not found on line number %d", keyString, lineNumber)
 	}
-
-	// Get withdrawal private keys and require the correct count
-	withdrawalPrivKeys, err := keymanager.FetchWithdrawalPrivateKeys(cliCtx.Context)
-	require.NoError(t, err)
-	require.Equal(t, numAccounts, len(pubKeys))
-
-	// Assert that withdrawal private keys are printed on the correct lines
-	for i, key := range withdrawalPrivKeys {
-		lineNumber := prologLength + accountLength*i + withdrawalPrivateKeyOffset
-		keyString := fmt.Sprintf("%#x", key)
-		keyFound := strings.Contains(lines[lineNumber], keyString)
-		assert.Equal(t, true, keyFound, "Withdrawal Private Key %s not found on line number %d", keyString, lineNumber)
-	}
-
-	// Assert that deposit data are printed on the correct lines
-	for i, deposit := range depositDataForAccounts {
-		lineNumber := prologLength + accountLength*i + depositOffset
-		depositString := fmt.Sprintf("%#x", deposit)
-		depositFound := strings.Contains(lines[lineNumber], depositString)
-		assert.Equal(t, true, depositFound, "Deposit data %s not found on line number %d", depositString, lineNumber)
-	}
 }
 
 func TestListAccounts_RemoteKeymanager(t *testing.T) {
@@ -408,6 +390,7 @@ func TestListAccounts_RemoteKeymanager(t *testing.T) {
 		publicKeys: pubKeys,
 		opts: &remote.KeymanagerOpts{
 			RemoteCertificate: &remote.CertificateConfig{
+				RequireTls:     true,
 				ClientCertPath: "/tmp/client.crt",
 				ClientKeyPath:  "/tmp/client.key",
 				CACertPath:     "/tmp/ca.crt",
@@ -434,6 +417,7 @@ func TestListAccounts_RemoteKeymanager(t *testing.T) {
 
 		Configuration options
 		Remote gRPC address: localhost:4000
+		Require TLS: true
 		Client cert path: /tmp/client.crt
 		Client key path: /tmp/client.key
 		CA cert path: /tmp/ca.crt
@@ -451,9 +435,9 @@ func TestListAccounts_RemoteKeymanager(t *testing.T) {
 	*/
 
 	// Expected output format definition
-	const prologLength = 10
+	const prologLength = 11
 	const configOffset = 4
-	const configLength = 4
+	const configLength = 5
 	const accountLength = 4
 	const nameOffset = 1
 	const keyOffset = 2
@@ -489,4 +473,56 @@ func TestListAccounts_RemoteKeymanager(t *testing.T) {
 		keyFound := strings.Contains(lines[lineNumber], keyString)
 		assert.Equal(t, true, keyFound, "Public Key %s not found on line number %d", keyString, lineNumber)
 	}
+}
+
+func TestListAccounts_ListValidatorIndices(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	numAccounts := 3
+	pubKeys := make([][48]byte, numAccounts)
+	pks := make([][]byte, numAccounts)
+
+	for i := 0; i < numAccounts; i++ {
+		key := make([]byte, 48)
+		copy(key, strconv.Itoa(i))
+		pubKeys[i] = bytesutil.ToBytes48(key)
+		pks[i] = key
+	}
+
+	km := &mockRemoteKeymanager{
+		publicKeys: pubKeys,
+	}
+
+	rescueStdout := os.Stdout
+	r, writer, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stdout = writer
+
+	m := mock.NewMockBeaconNodeValidatorClient(ctrl)
+
+	req := &ethpb.MultipleValidatorStatusRequest{PublicKeys: pks}
+	resp := &ethpb.MultipleValidatorStatusResponse{Indices: []types.ValidatorIndex{1, math.MaxUint64, 2}}
+
+	m.
+		EXPECT().
+		MultipleValidatorStatus(gomock.Eq(context.Background()), gomock.Eq(req)).
+		Return(resp, nil)
+
+	require.NoError(
+		t,
+		listValidatorIndices(
+			context.Background(),
+			km,
+			m,
+		),
+	)
+
+	require.NoError(t, writer.Close())
+	out, err := ioutil.ReadAll(r)
+	require.NoError(t, err)
+	os.Stdout = rescueStdout
+
+	expectedStdout := au.BrightGreen("Validator indices:").Bold().String() + "\n0x30000000: 1\n0x32000000: 2\n"
+	require.Equal(t, expectedStdout, string(out))
 }

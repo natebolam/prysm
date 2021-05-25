@@ -19,8 +19,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/go-bitfield"
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
 	"github.com/prysmaticlabs/prysm/shared/iputils"
-	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/sirupsen/logrus"
 )
 
@@ -72,26 +72,17 @@ func privKey(cfg *Config) (*ecdsa.PrivateKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		rawbytes, err := priv.Raw()
-		if err != nil {
-			return nil, err
-		}
-		dst := make([]byte, hex.EncodedLen(len(rawbytes)))
-		hex.Encode(dst, rawbytes)
-		if err = ioutil.WriteFile(defaultKeyPath, dst, params.BeaconIoConfig().ReadWritePermissions); err != nil {
-			return nil, err
-		}
 		convertedKey := convertFromInterfacePrivKey(priv)
 		return convertedKey, nil
 	}
 	if defaultKeysExist && privateKeyPath == "" {
 		privateKeyPath = defaultKeyPath
 	}
-	return retrievePrivKeyFromFile(privateKeyPath)
+	return privKeyFromFile(privateKeyPath)
 }
 
 // Retrieves a p2p networking private key from a file path.
-func retrievePrivKeyFromFile(path string) (*ecdsa.PrivateKey, error) {
+func privKeyFromFile(path string) (*ecdsa.PrivateKey, error) {
 	src, err := ioutil.ReadFile(path)
 	if err != nil {
 		log.WithError(err).Error("Error reading private key from file")
@@ -129,7 +120,7 @@ func metaDataFromConfig(cfg *Config) (*pbp2p.MetaData, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err = ioutil.WriteFile(defaultKeyPath, dst, params.BeaconIoConfig().ReadWritePermissions); err != nil {
+		if err := fileutil.WriteFile(defaultKeyPath, dst); err != nil {
 			return nil, err
 		}
 		return metaData, nil

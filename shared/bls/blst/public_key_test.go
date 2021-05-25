@@ -1,5 +1,5 @@
-// +build linux,amd64 linux,arm64
-// +build blst_enabled
+// +build linux,amd64 linux,arm64 darwin,amd64 windows,amd64
+// +build !blst_disabled
 
 package blst_test
 
@@ -64,11 +64,15 @@ func TestPublicKeyFromBytes(t *testing.T) {
 }
 
 func TestPublicKey_Copy(t *testing.T) {
-	pubkeyA := blst.RandKey().PublicKey()
+	priv, err := blst.RandKey()
+	require.NoError(t, err)
+	pubkeyA := priv.PublicKey()
 	pubkeyBytes := pubkeyA.Marshal()
 
 	pubkeyB := pubkeyA.Copy()
-	pubkeyB.Aggregate(blst.RandKey().PublicKey())
+	priv2, err := blst.RandKey()
+	require.NoError(t, err)
+	pubkeyB.Aggregate(priv2.PublicKey())
 
 	require.DeepEqual(t, pubkeyA.Marshal(), pubkeyBytes, "Pubkey was mutated after copy")
 }

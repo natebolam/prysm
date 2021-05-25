@@ -6,38 +6,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
+	types "github.com/prysmaticlabs/eth2-types"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/featureconfig"
 	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/validator/client/iface"
+	"github.com/prysmaticlabs/prysm/validator/keymanager/remote"
 	"go.opencensus.io/trace"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// Validator interface defines the primary methods of a validator client.
-type Validator interface {
-	Done()
-	WaitForChainStart(ctx context.Context) error
-	WaitForSync(ctx context.Context) error
-	WaitForSynced(ctx context.Context) error
-	WaitForActivation(ctx context.Context) error
-	SlasherReady(ctx context.Context) error
-	CanonicalHeadSlot(ctx context.Context) (uint64, error)
-	NextSlot() <-chan uint64
-	SlotDeadline(slot uint64) time.Time
-	LogValidatorGainsAndLosses(ctx context.Context, slot uint64) error
-	UpdateDuties(ctx context.Context, slot uint64) error
-	UpdateProtections(ctx context.Context, slot uint64) error
-	RolesAt(ctx context.Context, slot uint64) (map[[48]byte][]ValidatorRole, error) // validator pubKey -> roles
-	SubmitAttestation(ctx context.Context, slot uint64, pubKey [48]byte)
-	ProposeBlock(ctx context.Context, slot uint64, pubKey [48]byte)
-	SubmitAggregateAndProof(ctx context.Context, slot uint64, pubKey [48]byte)
-	LogAttestationsSubmitted()
-	SaveProtections(ctx context.Context) error
-	UpdateDomainDataCaches(ctx context.Context, slot uint64)
-	WaitForWalletInitialization(ctx context.Context) error
-}
+// time to wait before trying to reconnect with beacon node.
+var backOffPeriod = 10 * time.Second
 
 // Run the main validator routine. This routine exits if the context is
 // canceled.
@@ -49,7 +32,7 @@ type Validator interface {
 // 4 - Update assignments
 // 5 - Determine role at current slot
 // 6 - Perform assigned role, if any
-func run(ctx context.Context, v Validator) {
+func run(ctx context.Context, v iface.Validator) {
 	cleanup := v.Done
 	defer cleanup()
 	if err := v.WaitForWalletInitialization(ctx); err != nil {
@@ -62,58 +45,124 @@ func run(ctx context.Context, v Validator) {
 			log.Fatalf("Slasher is not ready: %v", err)
 		}
 	}
-	if featureconfig.Get().WaitForSynced {
-		if err := v.WaitForSynced(ctx); err != nil {
-			log.Fatalf("Could not determine if chain started and beacon node is synced: %v", err)
+	ticker := time.NewTicker(backOffPeriod)
+	defer ticker.Stop()
+
+	var headSlot types.Slot
+	firstTime := true
+	for {
+		if !firstTime {
+			if ctx.Err() != nil {
+				log.Info("Context canceled, stopping validator")
+				return // Exit if context is canceled.
+			}
+			<-ticker.C
+		} else {
+			firstTime = false
 		}
-	} else {
-		if err := v.WaitForChainStart(ctx); err != nil {
+		err := v.WaitForChainStart(ctx)
+		if isConnectionError(err) {
+			log.Warnf("Could not determine if beacon chain started: %v", err)
+			continue
+		}
+		if err != nil {
 			log.Fatalf("Could not determine if beacon chain started: %v", err)
 		}
-		if err := v.WaitForSync(ctx); err != nil {
+		err = v.WaitForSync(ctx)
+		if isConnectionError(err) {
+			log.Warnf("Could not determine if beacon chain started: %v", err)
+			continue
+		}
+		if err != nil {
 			log.Fatalf("Could not determine if beacon node synced: %v", err)
 		}
+		err = v.WaitForActivation(ctx, nil /* accountsChangedChan */)
+		if isConnectionError(err) {
+			log.Warnf("Could not wait for validator activation: %v", err)
+			continue
+		}
+		if err != nil {
+			log.Fatalf("Could not wait for validator activation: %v", err)
+		}
+		headSlot, err = v.CanonicalHeadSlot(ctx)
+		if isConnectionError(err) {
+			log.Warnf("Could not get current canonical head slot: %v", err)
+			continue
+		}
+		if err != nil {
+			log.Fatalf("Could not get current canonical head slot: %v", err)
+		}
+		break
 	}
-	if err := v.WaitForActivation(ctx); err != nil {
-		log.Fatalf("Could not wait for validator activation: %v", err)
-	}
-	headSlot, err := v.CanonicalHeadSlot(ctx)
-	if err != nil {
-		log.Fatalf("Could not get current canonical head slot: %v", err)
-	}
+
+	connectionErrorChannel := make(chan error, 1)
+	go v.ReceiveBlocks(ctx, connectionErrorChannel)
 	if err := v.UpdateDuties(ctx, headSlot); err != nil {
 		handleAssignmentError(err, headSlot)
 	}
+
+	accountsChangedChan := make(chan [][48]byte, 1)
+	sub := v.GetKeymanager().SubscribeAccountChanges(accountsChangedChan)
 	for {
+		slotCtx, cancel := context.WithCancel(ctx)
 		ctx, span := trace.StartSpan(ctx, "validator.processSlot")
 
 		select {
 		case <-ctx.Done():
 			log.Info("Context canceled, stopping validator")
 			span.End()
+			cancel()
+			sub.Unsubscribe()
+			close(accountsChangedChan)
 			return // Exit if context is canceled.
+		case blocksError := <-connectionErrorChannel:
+			if blocksError != nil {
+				log.WithError(blocksError).Warn("block stream interrupted")
+				go v.ReceiveBlocks(ctx, connectionErrorChannel)
+				continue
+			}
+		case newKeys := <-accountsChangedChan:
+			anyActive, err := v.HandleKeyReload(ctx, newKeys)
+			if err != nil {
+				log.WithError(err).Error("Could not properly handle reloaded keys")
+			}
+			if !anyActive {
+				log.Info("No active keys found. Waiting for activation...")
+				err := v.WaitForActivation(ctx, accountsChangedChan)
+				if err != nil {
+					log.Fatalf("Could not wait for validator activation: %v", err)
+				}
+			}
 		case slot := <-v.NextSlot():
 			span.AddAttributes(trace.Int64Attribute("slot", int64(slot)))
+
+			remoteKm, ok := v.GetKeymanager().(remote.RemoteKeymanager)
+			if ok {
+				_, err := remoteKm.ReloadPublicKeys(ctx)
+				if err != nil {
+					log.WithError(err).Error(msgCouldNotFetchKeys)
+				}
+			}
+
+			allExited, err := v.AllValidatorsAreExited(ctx)
+			if err != nil {
+				log.WithError(err).Error("Could not check if validators are exited")
+			}
+			if allExited {
+				log.Info("All validators are exited, no more work to perform...")
+				continue
+			}
+
 			deadline := v.SlotDeadline(slot)
-			slotCtx, cancel := context.WithDeadline(ctx, deadline)
-			// Report this validator client's rewards and penalties throughout its lifecycle.
+			slotCtx, cancel = context.WithDeadline(ctx, deadline)
 			log := log.WithField("slot", slot)
 			log.WithField("deadline", deadline).Debug("Set deadline for proposals and attestations")
-			if err := v.LogValidatorGainsAndLosses(slotCtx, slot); err != nil {
-				log.WithError(err).Error("Could not report validator's rewards/penalties")
-			}
 
 			// Keep trying to update assignments if they are nil or if we are past an
 			// epoch transition in the beacon node's state.
 			if err := v.UpdateDuties(ctx, slot); err != nil {
 				handleAssignmentError(err, slot)
 				cancel()
-				span.End()
-				continue
-			}
-
-			if err := v.UpdateProtections(ctx, slot); err != nil {
-				log.WithError(err).Error("Could not update validator protection")
 				span.End()
 				continue
 			}
@@ -134,16 +183,16 @@ func run(ctx context.Context, v Validator) {
 			for pubKey, roles := range allRoles {
 				wg.Add(len(roles))
 				for _, role := range roles {
-					go func(role ValidatorRole, pubKey [48]byte) {
+					go func(role iface.ValidatorRole, pubKey [48]byte) {
 						defer wg.Done()
 						switch role {
-						case roleAttester:
+						case iface.RoleAttester:
 							v.SubmitAttestation(slotCtx, slot, pubKey)
-						case roleProposer:
+						case iface.RoleProposer:
 							v.ProposeBlock(slotCtx, slot, pubKey)
-						case roleAggregator:
+						case iface.RoleAggregator:
 							v.SubmitAggregateAndProof(slotCtx, slot, pubKey)
-						case roleUnknown:
+						case iface.RoleUnknown:
 							log.WithField("pubKey", fmt.Sprintf("%#x", bytesutil.Trunc(pubKey[:]))).Trace("No active roles, doing nothing")
 						default:
 							log.Warnf("Unhandled role %v", role)
@@ -152,11 +201,16 @@ func run(ctx context.Context, v Validator) {
 				}
 			}
 			// Wait for all processes to complete, then report span complete.
+
 			go func() {
 				wg.Wait()
+				// Log this client performance in the previous epoch
 				v.LogAttestationsSubmitted()
-				if err := v.SaveProtections(ctx); err != nil {
-					log.WithError(err).Error("Could not save validator protection")
+				if err := v.LogValidatorGainsAndLosses(slotCtx, slot); err != nil {
+					log.WithError(err).Error("Could not report validator's rewards/penalties")
+				}
+				if err := v.LogNextDutyTimeLeft(slot); err != nil {
+					log.WithError(err).Error("Could not report next count down")
 				}
 				span.End()
 			}()
@@ -164,7 +218,11 @@ func run(ctx context.Context, v Validator) {
 	}
 }
 
-func handleAssignmentError(err error, slot uint64) {
+func isConnectionError(err error) bool {
+	return err != nil && errors.Is(err, iface.ErrConnectionIssue)
+}
+
+func handleAssignmentError(err error, slot types.Slot) {
 	if errCode, ok := status.FromError(err); ok && errCode.Code() == codes.NotFound {
 		log.WithField(
 			"epoch", slot/params.BeaconConfig().SlotsPerEpoch,

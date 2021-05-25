@@ -29,16 +29,9 @@ import (
 	pbp2p "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
-
-var log logrus.FieldLogger
-
-func init() {
-	log = logrus.WithField("prefix", "rpc/validator")
-}
 
 // Server defines a server implementation of the gRPC Validator service,
 // providing RPC endpoints for obtaining validator assignments per epoch, the slots
@@ -57,14 +50,13 @@ type Server struct {
 	DepositFetcher         depositcache.DepositFetcher
 	ChainStartFetcher      powchain.ChainStartFetcher
 	Eth1InfoFetcher        powchain.ChainInfoFetcher
-	GenesisTimeFetcher     blockchain.TimeFetcher
 	SyncChecker            sync.Checker
 	StateNotifier          statefeed.Notifier
 	BlockNotifier          blockfeed.Notifier
 	P2P                    p2p.Broadcaster
 	AttPool                attestations.Pool
-	SlashingsPool          *slashings.Pool
-	ExitPool               *voluntaryexits.Pool
+	SlashingsPool          slashings.PoolManager
+	ExitPool               voluntaryexits.PoolManager
 	BlockReceiver          blockchain.BlockReceiver
 	MockEth1Votes          bool
 	Eth1BlockFetcher       powchain.POWBlockFetcher
@@ -164,8 +156,9 @@ func (vs *Server) WaitForChainStart(_ *ptypes.Empty, stream ethpb.BeaconNodeVali
 	}
 	if head != nil {
 		res := &ethpb.ChainStartResponse{
-			Started:     true,
-			GenesisTime: head.GenesisTime(),
+			Started:               true,
+			GenesisTime:           head.GenesisTime(),
+			GenesisValidatorsRoot: head.GenesisValidatorRoot(),
 		}
 		return stream.Send(res)
 	}
@@ -176,71 +169,17 @@ func (vs *Server) WaitForChainStart(_ *ptypes.Empty, stream ethpb.BeaconNodeVali
 	for {
 		select {
 		case event := <-stateChannel:
-			if event.Type == statefeed.ChainStarted {
-				data, ok := event.Data.(*statefeed.ChainStartedData)
-				if !ok {
-					return errors.New("event data is not type *statefeed.ChainStartData")
-				}
-				log.WithField("starttime", data.StartTime).Debug("Received chain started event")
-				log.Debug("Sending genesis time notification to connected validator clients")
-				res := &ethpb.ChainStartResponse{
-					Started:     true,
-					GenesisTime: uint64(data.StartTime.Unix()),
-				}
-				return stream.Send(res)
-			}
-			// Handle race condition in the event the blockchain
-			// service isn't initialized in time and the saved head state is nil.
 			if event.Type == statefeed.Initialized {
 				data, ok := event.Data.(*statefeed.InitializedData)
 				if !ok {
 					return errors.New("event data is not type *statefeed.InitializedData")
 				}
-				res := &ethpb.ChainStartResponse{
-					Started:     true,
-					GenesisTime: uint64(data.StartTime.Unix()),
-				}
-				return stream.Send(res)
-			}
-		case <-stateSub.Err():
-			return status.Error(codes.Aborted, "Subscriber closed, exiting goroutine")
-		case <-vs.Ctx.Done():
-			return status.Error(codes.Canceled, "Context canceled")
-		}
-	}
-}
-
-// WaitForSynced subscribes to the state channel and ends the stream when the state channel
-// indicates the beacon node has been initialized and is ready
-func (vs *Server) WaitForSynced(_ *ptypes.Empty, stream ethpb.BeaconNodeValidator_WaitForSyncedServer) error {
-	head, err := vs.HeadFetcher.HeadState(stream.Context())
-	if err != nil {
-		return status.Errorf(codes.Internal, "Could not retrieve head state: %v", err)
-	}
-	if head != nil && !vs.SyncChecker.Syncing() {
-		res := &ethpb.SyncedResponse{
-			Synced:      true,
-			GenesisTime: head.GenesisTime(),
-		}
-		return stream.Send(res)
-	}
-
-	stateChannel := make(chan *feed.Event, 1)
-	stateSub := vs.StateNotifier.StateFeed().Subscribe(stateChannel)
-	defer stateSub.Unsubscribe()
-	for {
-		select {
-		case event := <-stateChannel:
-			if event.Type == statefeed.Synced {
-				data, ok := event.Data.(*statefeed.SyncedData)
-				if !ok {
-					return errors.New("event data is not type *statefeed.SyncedData")
-				}
-				log.WithField("starttime", data.StartTime).Debug("Received sync completed event")
+				log.WithField("starttime", data.StartTime).Debug("Received chain started event")
 				log.Debug("Sending genesis time notification to connected validator clients")
-				res := &ethpb.SyncedResponse{
-					Synced:      true,
-					GenesisTime: uint64(data.StartTime.Unix()),
+				res := &ethpb.ChainStartResponse{
+					Started:               true,
+					GenesisTime:           uint64(data.StartTime.Unix()),
+					GenesisValidatorsRoot: data.GenesisValidatorsRoot,
 				}
 				return stream.Send(res)
 			}

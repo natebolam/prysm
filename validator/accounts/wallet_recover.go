@@ -10,11 +10,10 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
-	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/cmd/validator/flags"
 	"github.com/prysmaticlabs/prysm/shared/promptutil"
 	"github.com/prysmaticlabs/prysm/validator/accounts/prompt"
 	"github.com/prysmaticlabs/prysm/validator/accounts/wallet"
-	"github.com/prysmaticlabs/prysm/validator/flags"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/derived"
 	"github.com/tyler-smith/go-bip39"
@@ -22,14 +21,22 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-const phraseWordCount = 24
+const (
+	phraseWordCount                 = 24
+	newMnemonicPassphraseYesNoText  = "(Advanced) Do you want to setup a '25th word' passphrase for your mnemonic? [y/n]"
+	newMnemonicPassphrasePromptText = "(Advanced) Setup a passphrase '25th word' for your mnemonic " +
+		"(WARNING: You cannot recover your keys from your mnemonic if you forget this passphrase!)"
+	mnemonicPassphraseYesNoText  = "(Advanced) Do you have an optional '25th word' passphrase for your mnemonic? [y/n]"
+	mnemonicPassphrasePromptText = "(Advanced) Enter the '25th word' passphrase for your mnemonic"
+)
 
 // RecoverWalletConfig to run the recover wallet function.
 type RecoverWalletConfig struct {
-	WalletDir      string
-	WalletPassword string
-	Mnemonic       string
-	NumAccounts    int64
+	WalletDir        string
+	WalletPassword   string
+	Mnemonic         string
+	NumAccounts      int
+	Mnemonic25thWord string
 }
 
 // RecoverWalletCli uses a menmonic seed phrase to recover a wallet into the path provided. This
@@ -38,6 +45,38 @@ func RecoverWalletCli(cliCtx *cli.Context) error {
 	mnemonic, err := inputMnemonic(cliCtx)
 	if err != nil {
 		return errors.Wrap(err, "could not get mnemonic phrase")
+	}
+	config := &RecoverWalletConfig{
+		Mnemonic: mnemonic,
+	}
+	skipMnemonic25thWord := cliCtx.IsSet(flags.SkipMnemonic25thWordCheckFlag.Name)
+	has25thWordFile := cliCtx.IsSet(flags.Mnemonic25thWordFileFlag.Name)
+	if !skipMnemonic25thWord && !has25thWordFile {
+		resp, err := promptutil.ValidatePrompt(
+			os.Stdin, mnemonicPassphraseYesNoText, promptutil.ValidateYesOrNo,
+		)
+		if err != nil {
+			return errors.Wrap(err, "could not validate choice")
+		}
+		if strings.EqualFold(resp, "y") {
+			mnemonicPassphrase, err := promptutil.InputPassword(
+				cliCtx,
+				flags.Mnemonic25thWordFileFlag,
+				mnemonicPassphrasePromptText,
+				"Confirm mnemonic passphrase",
+				false, /* Should confirm password */
+				func(input string) error {
+					if strings.TrimSpace(input) == "" {
+						return errors.New("input cannot be empty")
+					}
+					return nil
+				},
+			)
+			if err != nil {
+				return err
+			}
+			config.Mnemonic25thWord = mnemonicPassphrase
+		}
 	}
 	walletDir, err := prompt.InputDirectory(cliCtx, prompt.WalletDirPromptText, flags.WalletDirFlag)
 	if err != nil {
@@ -58,31 +97,27 @@ func RecoverWalletCli(cliCtx *cli.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "could not get number of accounts to recover")
 	}
-	_, _, err = RecoverWallet(cliCtx.Context, &RecoverWalletConfig{
-		WalletDir:      walletDir,
-		WalletPassword: walletPassword,
-		Mnemonic:       mnemonic,
-		NumAccounts:    numAccounts,
-	})
-	if err != nil {
+	config.WalletDir = walletDir
+	config.WalletPassword = walletPassword
+	config.NumAccounts = int(numAccounts)
+	if _, err = RecoverWallet(cliCtx.Context, config); err != nil {
 		return err
 	}
 	log.Infof(
-		"Successfully recovered HD wallet and saved configuration to disk. " +
-			"Make a new validator account with ./prysm.sh validator accounts create",
+		"Successfully recovered HD wallet with accounts and saved configuration to disk",
 	)
 	return nil
 }
 
 // RecoverWallet uses a menmonic seed phrase to recover a wallet into the path provided.
-func RecoverWallet(ctx context.Context, cfg *RecoverWalletConfig) (*wallet.Wallet, []*ethpb.Deposit_Data, error) {
+func RecoverWallet(ctx context.Context, cfg *RecoverWalletConfig) (*wallet.Wallet, error) {
 	// Ensure that the wallet directory does not contain a wallet already
 	dirExists, err := wallet.Exists(cfg.WalletDir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if dirExists {
-		return nil, nil, errors.New("a wallet already exists at this location. Please input an" +
+		return nil, errors.New("a wallet already exists at this location. Please input an" +
 			" alternative location for the new wallet or remove the current wallet")
 	}
 	w := wallet.New(&wallet.Config{
@@ -90,51 +125,27 @@ func RecoverWallet(ctx context.Context, cfg *RecoverWalletConfig) (*wallet.Walle
 		KeymanagerKind: keymanager.Derived,
 		WalletPassword: cfg.WalletPassword,
 	})
-	keymanagerConfig, err := derived.MarshalOptionsFile(ctx, derived.DefaultKeymanagerOpts())
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "could not marshal keymanager config file")
-	}
 	if err := w.SaveWallet(); err != nil {
-		return nil, nil, errors.Wrap(err, "could not save wallet to disk")
+		return nil, errors.Wrap(err, "could not save wallet to disk")
 	}
-	if err := w.WriteKeymanagerConfigToDisk(ctx, keymanagerConfig); err != nil {
-		return nil, nil, errors.Wrap(err, "could not write keymanager config to disk")
-	}
-	km, err := derived.KeymanagerForPhrase(ctx, &derived.SetupConfig{
-		Opts:     derived.DefaultKeymanagerOpts(),
-		Wallet:   w,
-		Mnemonic: cfg.Mnemonic,
+	km, err := derived.NewKeymanager(ctx, &derived.SetupConfig{
+		Wallet:           w,
+		ListenForChanges: false,
 	})
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "could not make keymanager for given phrase")
+		return nil, errors.Wrap(err, "could not make keymanager for given phrase")
 	}
-	if err := km.WriteEncryptedSeedToWallet(ctx, cfg.Mnemonic); err != nil {
-		return nil, nil, err
-	}
-	depositDataList := make([]*ethpb.Deposit_Data, cfg.NumAccounts)
-	if cfg.NumAccounts == 1 {
-		_, depositData, err := km.CreateAccount(ctx)
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "could not create account in wallet")
-		}
-		depositDataList[0] = depositData
-		return w, nil, nil
-	}
-	for i := int64(0); i < cfg.NumAccounts; i++ {
-		_, depositData, err := km.CreateAccount(ctx)
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "could not create account in wallet")
-		}
-		depositDataList[i] = depositData
+	if err := km.RecoverAccountsFromMnemonic(ctx, cfg.Mnemonic, cfg.Mnemonic25thWord, cfg.NumAccounts); err != nil {
+		return nil, err
 	}
 	log.WithField("wallet-path", w.AccountsDir()).Infof(
-		"Successfully recovered HD wallet with %d accounts. Please use accounts list to view details for your accounts",
+		"Successfully recovered HD wallet with %d accounts. Please use `accounts list` to view details for your accounts",
 		cfg.NumAccounts,
 	)
-	return w, depositDataList, nil
+	return w, nil
 }
 
-func inputMnemonic(cliCtx *cli.Context) (string, error) {
+func inputMnemonic(cliCtx *cli.Context) (mnemonicPhrase string, err error) {
 	if cliCtx.IsSet(flags.MnemonicFileFlag.Name) {
 		mnemonicFilePath := cliCtx.String(flags.MnemonicFileFlag.Name)
 		data, err := ioutil.ReadFile(mnemonicFilePath)
@@ -142,19 +153,20 @@ func inputMnemonic(cliCtx *cli.Context) (string, error) {
 			return "", err
 		}
 		enteredMnemonic := string(data)
-		if err := validateMnemonic(enteredMnemonic); err != nil {
+		if err := ValidateMnemonic(enteredMnemonic); err != nil {
 			return "", errors.Wrap(err, "mnemonic phrase did not pass validation")
 		}
 		return enteredMnemonic, nil
 	}
 	allowedLanguages := map[string][]string{
-		"english":             wordlists.English,
 		"chinese_simplified":  wordlists.ChineseSimplified,
 		"chinese_traditional": wordlists.ChineseTraditional,
+		"czech":               wordlists.Czech,
+		"english":             wordlists.English,
 		"french":              wordlists.French,
-		"italian":             wordlists.Italian,
 		"japanese":            wordlists.Japanese,
 		"korean":              wordlists.Korean,
+		"italian":             wordlists.Italian,
 		"spanish":             wordlists.Spanish,
 	}
 	languages := make([]string, 0)
@@ -176,10 +188,10 @@ func inputMnemonic(cliCtx *cli.Context) (string, error) {
 		return "", fmt.Errorf("could not get mnemonic language: %w", err)
 	}
 	bip39.SetWordList(allowedLanguages[selectedLanguage])
-	mnemonicPhrase, err := promptutil.ValidatePrompt(
+	mnemonicPhrase, err = promptutil.ValidatePrompt(
 		os.Stdin,
 		"Enter the seed phrase for the wallet you would like to recover",
-		validateMnemonic)
+		ValidateMnemonic)
 	if err != nil {
 		return "", fmt.Errorf("could not get mnemonic phrase: %w", err)
 	}
@@ -189,9 +201,12 @@ func inputMnemonic(cliCtx *cli.Context) (string, error) {
 func inputNumAccounts(cliCtx *cli.Context) (int64, error) {
 	if cliCtx.IsSet(flags.NumAccountsFlag.Name) {
 		numAccounts := cliCtx.Int64(flags.NumAccountsFlag.Name)
+		if numAccounts <= 0 {
+			return 0, errors.New("must recover at least 1 account")
+		}
 		return numAccounts, nil
 	}
-	numAccounts, err := promptutil.DefaultAndValidatePrompt("Enter how many accounts you would like to recover", "0", promptutil.ValidateNumber)
+	numAccounts, err := promptutil.ValidatePrompt(os.Stdin, "Enter how many accounts you would like to generate from the mnemonic", promptutil.ValidateNumber)
 	if err != nil {
 		return 0, err
 	}
@@ -199,10 +214,15 @@ func inputNumAccounts(cliCtx *cli.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if numAccountsInt <= 0 {
+		return 0, errors.New("must recover at least 1 account")
+	}
 	return int64(numAccountsInt), nil
 }
 
-func validateMnemonic(mnemonic string) error {
+// ValidateMnemonic ensures that it is not empty and that the count of the words are
+// as specified(currently 24).
+func ValidateMnemonic(mnemonic string) error {
 	if strings.Trim(mnemonic, " ") == "" {
 		return errors.New("phrase cannot be empty")
 	}

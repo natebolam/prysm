@@ -12,6 +12,7 @@ import (
 
 	_ "github.com/gogo/protobuf/gogoproto"
 	proto "github.com/gogo/protobuf/proto"
+	github_com_prysmaticlabs_eth2_types "github.com/prysmaticlabs/eth2-types"
 	v1alpha1 "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	github_com_prysmaticlabs_go_bitfield "github.com/prysmaticlabs/go-bitfield"
 	grpc "google.golang.org/grpc"
@@ -31,7 +32,7 @@ var _ = math.Inf
 const _ = proto.GoGoProtoPackageIsVersion3 // please upgrade the proto package
 
 type HighestAttestationRequest struct {
-	ValidatorIds         []uint64 `protobuf:"varint,1,rep,packed,name=validator_ids,json=validatorIds,proto3" json:"validator_ids,omitempty"`
+	ValidatorIds         []uint64 `protobuf:"varint,1,rep,packed,name=validator_ids,json=validatorIds,proto3" json:"validator_ids,omitempty"` // Deprecated: Do not use.
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -70,6 +71,7 @@ func (m *HighestAttestationRequest) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_HighestAttestationRequest proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *HighestAttestationRequest) GetValidatorIds() []uint64 {
 	if m != nil {
 		return m.ValidatorIds
@@ -78,7 +80,7 @@ func (m *HighestAttestationRequest) GetValidatorIds() []uint64 {
 }
 
 type HighestAttestationResponse struct {
-	Attestations         []*HighestAttestation `protobuf:"bytes,1,rep,name=attestations,proto3" json:"attestations,omitempty"`
+	Attestations         []*HighestAttestation `protobuf:"bytes,1,rep,name=attestations,proto3" json:"attestations,omitempty"` // Deprecated: Do not use.
 	XXX_NoUnkeyedLiteral struct{}              `json:"-"`
 	XXX_unrecognized     []byte                `json:"-"`
 	XXX_sizecache        int32                 `json:"-"`
@@ -117,6 +119,7 @@ func (m *HighestAttestationResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_HighestAttestationResponse proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *HighestAttestationResponse) GetAttestations() []*HighestAttestation {
 	if m != nil {
 		return m.Attestations
@@ -125,12 +128,12 @@ func (m *HighestAttestationResponse) GetAttestations() []*HighestAttestation {
 }
 
 type HighestAttestation struct {
-	ValidatorId          uint64   `protobuf:"varint,1,opt,name=validator_id,json=validatorId,proto3" json:"validator_id,omitempty"`
-	HighestSourceEpoch   uint64   `protobuf:"varint,2,opt,name=highest_source_epoch,json=highestSourceEpoch,proto3" json:"highest_source_epoch,omitempty"`
-	HighestTargetEpoch   uint64   `protobuf:"varint,3,opt,name=highest_target_epoch,json=highestTargetEpoch,proto3" json:"highest_target_epoch,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	ValidatorId          uint64                                    `protobuf:"varint,1,opt,name=validator_id,json=validatorId,proto3" json:"validator_id,omitempty"`                                                                           // Deprecated: Do not use.
+	HighestSourceEpoch   github_com_prysmaticlabs_eth2_types.Epoch `protobuf:"varint,2,opt,name=highest_source_epoch,json=highestSourceEpoch,proto3,casttype=github.com/prysmaticlabs/eth2-types.Epoch" json:"highest_source_epoch,omitempty"` // Deprecated: Do not use.
+	HighestTargetEpoch   github_com_prysmaticlabs_eth2_types.Epoch `protobuf:"varint,3,opt,name=highest_target_epoch,json=highestTargetEpoch,proto3,casttype=github.com/prysmaticlabs/eth2-types.Epoch" json:"highest_target_epoch,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}                                  `json:"-"`
+	XXX_unrecognized     []byte                                    `json:"-"`
+	XXX_sizecache        int32                                     `json:"-"`
 }
 
 func (m *HighestAttestation) Reset()         { *m = HighestAttestation{} }
@@ -166,6 +169,7 @@ func (m *HighestAttestation) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_HighestAttestation proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *HighestAttestation) GetValidatorId() uint64 {
 	if m != nil {
 		return m.ValidatorId
@@ -173,14 +177,15 @@ func (m *HighestAttestation) GetValidatorId() uint64 {
 	return 0
 }
 
-func (m *HighestAttestation) GetHighestSourceEpoch() uint64 {
+// Deprecated: Do not use.
+func (m *HighestAttestation) GetHighestSourceEpoch() github_com_prysmaticlabs_eth2_types.Epoch {
 	if m != nil {
 		return m.HighestSourceEpoch
 	}
 	return 0
 }
 
-func (m *HighestAttestation) GetHighestTargetEpoch() uint64 {
+func (m *HighestAttestation) GetHighestTargetEpoch() github_com_prysmaticlabs_eth2_types.Epoch {
 	if m != nil {
 		return m.HighestTargetEpoch
 	}
@@ -188,7 +193,7 @@ func (m *HighestAttestation) GetHighestTargetEpoch() uint64 {
 }
 
 type ProposerSlashingResponse struct {
-	ProposerSlashing     []*v1alpha1.ProposerSlashing `protobuf:"bytes,1,rep,name=proposer_slashing,json=proposerSlashing,proto3" json:"proposer_slashing,omitempty"`
+	ProposerSlashing     []*v1alpha1.ProposerSlashing `protobuf:"bytes,1,rep,name=proposer_slashing,json=proposerSlashing,proto3" json:"proposer_slashing,omitempty"` // Deprecated: Do not use.
 	XXX_NoUnkeyedLiteral struct{}                     `json:"-"`
 	XXX_unrecognized     []byte                       `json:"-"`
 	XXX_sizecache        int32                        `json:"-"`
@@ -227,6 +232,7 @@ func (m *ProposerSlashingResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ProposerSlashingResponse proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *ProposerSlashingResponse) GetProposerSlashing() []*v1alpha1.ProposerSlashing {
 	if m != nil {
 		return m.ProposerSlashing
@@ -235,7 +241,7 @@ func (m *ProposerSlashingResponse) GetProposerSlashing() []*v1alpha1.ProposerSla
 }
 
 type Slashable struct {
-	Slashable            bool     `protobuf:"varint,1,opt,name=slashable,proto3" json:"slashable,omitempty"`
+	Slashable            bool     `protobuf:"varint,1,opt,name=slashable,proto3" json:"slashable,omitempty"` // Deprecated: Do not use.
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -274,6 +280,7 @@ func (m *Slashable) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Slashable proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *Slashable) GetSlashable() bool {
 	if m != nil {
 		return m.Slashable
@@ -282,7 +289,7 @@ func (m *Slashable) GetSlashable() bool {
 }
 
 type AttesterSlashingResponse struct {
-	AttesterSlashing     []*v1alpha1.AttesterSlashing `protobuf:"bytes,1,rep,name=attester_slashing,json=attesterSlashing,proto3" json:"attester_slashing,omitempty"`
+	AttesterSlashing     []*v1alpha1.AttesterSlashing `protobuf:"bytes,1,rep,name=attester_slashing,json=attesterSlashing,proto3" json:"attester_slashing,omitempty"` // Deprecated: Do not use.
 	XXX_NoUnkeyedLiteral struct{}                     `json:"-"`
 	XXX_unrecognized     []byte                       `json:"-"`
 	XXX_sizecache        int32                        `json:"-"`
@@ -321,6 +328,7 @@ func (m *AttesterSlashingResponse) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_AttesterSlashingResponse proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *AttesterSlashingResponse) GetAttesterSlashing() []*v1alpha1.AttesterSlashing {
 	if m != nil {
 		return m.AttesterSlashing
@@ -329,8 +337,8 @@ func (m *AttesterSlashingResponse) GetAttesterSlashing() []*v1alpha1.AttesterSla
 }
 
 type ProposalHistory struct {
-	EpochBits            github_com_prysmaticlabs_go_bitfield.Bitlist `protobuf:"bytes,1,opt,name=epoch_bits,json=epochBits,proto3,casttype=github.com/prysmaticlabs/go-bitfield.Bitlist" json:"epoch_bits,omitempty"`
-	LatestEpochWritten   uint64                                       `protobuf:"varint,2,opt,name=latest_epoch_written,json=latestEpochWritten,proto3" json:"latest_epoch_written,omitempty"`
+	EpochBits            github_com_prysmaticlabs_go_bitfield.Bitlist `protobuf:"bytes,1,opt,name=epoch_bits,json=epochBits,proto3,casttype=github.com/prysmaticlabs/go-bitfield.Bitlist" json:"epoch_bits,omitempty"`                            // Deprecated: Do not use.
+	LatestEpochWritten   github_com_prysmaticlabs_eth2_types.Epoch    `protobuf:"varint,2,opt,name=latest_epoch_written,json=latestEpochWritten,proto3,casttype=github.com/prysmaticlabs/eth2-types.Epoch" json:"latest_epoch_written,omitempty"` // Deprecated: Do not use.
 	XXX_NoUnkeyedLiteral struct{}                                     `json:"-"`
 	XXX_unrecognized     []byte                                       `json:"-"`
 	XXX_sizecache        int32                                        `json:"-"`
@@ -369,6 +377,7 @@ func (m *ProposalHistory) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_ProposalHistory proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *ProposalHistory) GetEpochBits() github_com_prysmaticlabs_go_bitfield.Bitlist {
 	if m != nil {
 		return m.EpochBits
@@ -376,7 +385,8 @@ func (m *ProposalHistory) GetEpochBits() github_com_prysmaticlabs_go_bitfield.Bi
 	return nil
 }
 
-func (m *ProposalHistory) GetLatestEpochWritten() uint64 {
+// Deprecated: Do not use.
+func (m *ProposalHistory) GetLatestEpochWritten() github_com_prysmaticlabs_eth2_types.Epoch {
 	if m != nil {
 		return m.LatestEpochWritten
 	}
@@ -384,11 +394,11 @@ func (m *ProposalHistory) GetLatestEpochWritten() uint64 {
 }
 
 type AttestationHistory struct {
-	TargetToSource       map[uint64]uint64 `protobuf:"bytes,1,rep,name=target_to_source,json=targetToSource,proto3" json:"target_to_source,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"`
-	LatestEpochWritten   uint64            `protobuf:"varint,2,opt,name=latest_epoch_written,json=latestEpochWritten,proto3" json:"latest_epoch_written,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}          `json:"-"`
-	XXX_unrecognized     []byte            `json:"-"`
-	XXX_sizecache        int32             `json:"-"`
+	TargetToSource       map[uint64]uint64                         `protobuf:"bytes,1,rep,name=target_to_source,json=targetToSource,proto3" json:"target_to_source,omitempty" protobuf_key:"varint,1,opt,name=key,proto3" protobuf_val:"varint,2,opt,name=value,proto3"` // Deprecated: Do not use.
+	LatestEpochWritten   github_com_prysmaticlabs_eth2_types.Epoch `protobuf:"varint,2,opt,name=latest_epoch_written,json=latestEpochWritten,proto3,casttype=github.com/prysmaticlabs/eth2-types.Epoch" json:"latest_epoch_written,omitempty"`                           // Deprecated: Do not use.
+	XXX_NoUnkeyedLiteral struct{}                                  `json:"-"`
+	XXX_unrecognized     []byte                                    `json:"-"`
+	XXX_sizecache        int32                                     `json:"-"`
 }
 
 func (m *AttestationHistory) Reset()         { *m = AttestationHistory{} }
@@ -424,6 +434,7 @@ func (m *AttestationHistory) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_AttestationHistory proto.InternalMessageInfo
 
+// Deprecated: Do not use.
 func (m *AttestationHistory) GetTargetToSource() map[uint64]uint64 {
 	if m != nil {
 		return m.TargetToSource
@@ -431,7 +442,8 @@ func (m *AttestationHistory) GetTargetToSource() map[uint64]uint64 {
 	return nil
 }
 
-func (m *AttestationHistory) GetLatestEpochWritten() uint64 {
+// Deprecated: Do not use.
+func (m *AttestationHistory) GetLatestEpochWritten() github_com_prysmaticlabs_eth2_types.Epoch {
 	if m != nil {
 		return m.LatestEpochWritten
 	}
@@ -453,48 +465,52 @@ func init() {
 func init() { proto.RegisterFile("proto/slashing/slashing.proto", fileDescriptor_da7e95107d0081b4) }
 
 var fileDescriptor_da7e95107d0081b4 = []byte{
-	// 641 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x94, 0x54, 0xcd, 0x6e, 0xd3, 0x4c,
-	0x14, 0x95, 0x9b, 0x7e, 0x1f, 0xf4, 0x36, 0x40, 0x3a, 0x54, 0x28, 0x44, 0x25, 0x2d, 0x46, 0x88,
-	0x56, 0x50, 0xa7, 0x2d, 0x1b, 0x60, 0x45, 0x23, 0x21, 0x35, 0x1b, 0x40, 0x69, 0x11, 0x4b, 0x6b,
-	0x6c, 0xdf, 0xda, 0xa3, 0xba, 0x1e, 0x33, 0x73, 0x53, 0xc8, 0x7b, 0xb0, 0xe3, 0x51, 0x78, 0x01,
-	0x96, 0x3c, 0x01, 0x42, 0x7d, 0x00, 0x1e, 0x80, 0x15, 0xf2, 0xd8, 0x49, 0xdc, 0xda, 0x41, 0x74,
-	0x37, 0x73, 0x7f, 0xce, 0xb9, 0x3f, 0x67, 0x06, 0xee, 0xa5, 0x4a, 0x92, 0xec, 0xe9, 0x98, 0xeb,
-	0x48, 0x24, 0xe1, 0xf4, 0xe0, 0x18, 0x3b, 0x5b, 0x41, 0x8a, 0x50, 0xe1, 0xe8, 0xd4, 0x99, 0x38,
-	0x3a, 0xeb, 0x48, 0x51, 0xef, 0x6c, 0x97, 0xc7, 0x69, 0xc4, 0x77, 0x7b, 0x1e, 0x72, 0x5f, 0x26,
-	0xae, 0x17, 0x4b, 0xff, 0x24, 0xcf, 0xe9, 0x6c, 0x87, 0x82, 0xa2, 0x91, 0xe7, 0xf8, 0xf2, 0xb4,
-	0x17, 0xca, 0x50, 0xf6, 0x8c, 0xd9, 0x1b, 0x1d, 0x9b, 0x5b, 0xce, 0x97, 0x9d, 0xf2, 0x70, 0xfb,
-	0x25, 0xdc, 0x3d, 0x10, 0x61, 0x84, 0x9a, 0xf6, 0x89, 0x50, 0x13, 0x27, 0x21, 0x93, 0x21, 0x7e,
-	0x18, 0xa1, 0x26, 0xf6, 0x00, 0x6e, 0x9c, 0xf1, 0x58, 0x04, 0x9c, 0xa4, 0x72, 0x45, 0xa0, 0xdb,
-	0xd6, 0x46, 0x63, 0x73, 0x71, 0xd8, 0x9c, 0x1a, 0x07, 0x81, 0xb6, 0x43, 0xe8, 0xd4, 0x21, 0xe8,
-	0x54, 0x26, 0x1a, 0xd9, 0x00, 0x9a, 0x7c, 0x66, 0xce, 0x11, 0x96, 0xf7, 0x1e, 0x3a, 0x95, 0xce,
-	0x9c, 0x1a, 0x90, 0x0b, 0xa9, 0xf6, 0x17, 0x0b, 0x58, 0x35, 0x88, 0xdd, 0x87, 0x66, 0xb9, 0xc8,
-	0xb6, 0xb5, 0x61, 0x6d, 0x2e, 0x0e, 0x97, 0x4b, 0x35, 0xb2, 0x1d, 0x58, 0x8d, 0xf2, 0x44, 0x57,
-	0xcb, 0x91, 0xf2, 0xd1, 0xc5, 0x54, 0xfa, 0x51, 0x7b, 0xc1, 0x84, 0xb2, 0xc2, 0x77, 0x68, 0x5c,
-	0xaf, 0x32, 0x4f, 0x39, 0x83, 0xb8, 0x0a, 0x91, 0x8a, 0x8c, 0xc6, 0x85, 0x8c, 0x23, 0xe3, 0x32,
-	0x19, 0x76, 0x0a, 0xed, 0xb7, 0x4a, 0xa6, 0x52, 0xa3, 0x3a, 0x2c, 0x5a, 0x9a, 0x0e, 0xe1, 0x08,
-	0x56, 0xd2, 0xc2, 0xe7, 0x4e, 0xfa, 0x2d, 0x26, 0xf1, 0x68, 0x36, 0x09, 0xa4, 0xc8, 0x99, 0x6c,
-	0xd6, 0xa9, 0x60, 0xb5, 0xd2, 0x4b, 0x16, 0x7b, 0x0b, 0x96, 0xcc, 0x99, 0x7b, 0x31, 0xb2, 0x35,
-	0x58, 0xd2, 0x93, 0x8b, 0x19, 0xc1, 0xf5, 0xe1, 0xcc, 0x90, 0x15, 0x97, 0x8f, 0xac, 0xbe, 0x38,
-	0x5e, 0xf8, 0xfe, 0xb5, 0xb8, 0x0a, 0x56, 0x8b, 0x5f, 0xb2, 0xd8, 0x9f, 0x2d, 0xb8, 0x95, 0xf7,
-	0xc0, 0xe3, 0x03, 0xa1, 0x49, 0xaa, 0x31, 0x7b, 0x03, 0x60, 0xa6, 0xe8, 0x7a, 0x82, 0xb4, 0x29,
-	0xb2, 0xd9, 0xdf, 0xf9, 0xfd, 0x63, 0xfd, 0x49, 0x49, 0xb2, 0xa9, 0x1a, 0xeb, 0x53, 0x4e, 0xc2,
-	0x8f, 0xb9, 0xa7, 0x7b, 0xa1, 0xdc, 0xf6, 0x04, 0x1d, 0x0b, 0x8c, 0x03, 0xa7, 0x2f, 0x28, 0x16,
-	0x9a, 0x86, 0x4b, 0x06, 0xa3, 0x2f, 0x48, 0x67, 0x5b, 0x8a, 0x79, 0x46, 0x9c, 0x6f, 0xc7, 0xfd,
-	0xa8, 0x04, 0x11, 0x26, 0x93, 0xbd, 0xe6, 0x3e, 0xb3, 0x9e, 0xf7, 0xb9, 0xc7, 0xfe, 0x65, 0x01,
-	0x2b, 0x89, 0x67, 0x52, 0x99, 0x0f, 0xad, 0x62, 0xcd, 0x24, 0x0b, 0x89, 0x14, 0x23, 0x78, 0x5e,
-	0xa3, 0xd4, 0x2a, 0x80, 0x93, 0x2b, 0xe1, 0x48, 0x16, 0x1a, 0x4a, 0x48, 0x8d, 0x87, 0x37, 0xe9,
-	0x82, 0xf1, 0xea, 0xd5, 0x76, 0xf6, 0xe1, 0x76, 0x0d, 0x30, 0x6b, 0x41, 0xe3, 0x04, 0xc7, 0x85,
-	0xd0, 0xb3, 0x23, 0x5b, 0x85, 0xff, 0xce, 0x78, 0x3c, 0xc2, 0x02, 0x2b, 0xbf, 0xbc, 0x58, 0x78,
-	0x66, 0xed, 0x7d, 0x6d, 0xc0, 0x35, 0xb3, 0x14, 0x54, 0x2c, 0x85, 0x3b, 0x03, 0x3d, 0x95, 0x4c,
-	0xf9, 0x0d, 0x6d, 0xcd, 0x59, 0xf4, 0x20, 0x09, 0xf0, 0x13, 0x06, 0xa5, 0xd0, 0xce, 0xe3, 0xb9,
-	0x03, 0xa9, 0xd1, 0x96, 0x84, 0x56, 0x89, 0xb1, 0x9f, 0x7d, 0x53, 0xcc, 0x99, 0xc3, 0x75, 0x28,
-	0xc2, 0x04, 0x83, 0xbe, 0xf9, 0xd1, 0x4c, 0xe4, 0x01, 0xf2, 0x00, 0x55, 0x2d, 0xe1, 0xdc, 0x97,
-	0x26, 0xa0, 0x5b, 0xdf, 0xe2, 0x6b, 0xf9, 0x2e, 0x0d, 0x38, 0xe1, 0x55, 0x5a, 0x5d, 0xab, 0x61,
-	0x9e, 0xbd, 0x38, 0x0f, 0xda, 0x97, 0x7b, 0x9b, 0x92, 0x6c, 0xce, 0x21, 0xa9, 0x76, 0xf7, 0x57,
-	0x8e, 0x7e, 0xf3, 0xdb, 0x79, 0xd7, 0xfa, 0x7e, 0xde, 0xb5, 0x7e, 0x9e, 0x77, 0x2d, 0xef, 0x7f,
-	0xf3, 0x65, 0x3f, 0xfd, 0x13, 0x00, 0x00, 0xff, 0xff, 0x27, 0x68, 0xae, 0x2c, 0x36, 0x06, 0x00,
-	0x00,
+	// 708 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xbc, 0x55, 0xdf, 0x6e, 0xd3, 0x3e,
+	0x14, 0x56, 0xda, 0xfd, 0xfe, 0xcc, 0xeb, 0xef, 0x47, 0xe7, 0x4d, 0xa8, 0x54, 0xd0, 0x4d, 0x91,
+	0xa6, 0x6d, 0x62, 0x4d, 0xb5, 0x72, 0x03, 0xdc, 0xad, 0x02, 0x69, 0xbb, 0x00, 0x41, 0x37, 0x04,
+	0x77, 0x91, 0xd3, 0x9c, 0x25, 0xd6, 0xb2, 0x38, 0xc4, 0x27, 0x1b, 0x7d, 0x03, 0xde, 0x83, 0x87,
+	0x61, 0x97, 0x3c, 0xc1, 0x84, 0xf6, 0x18, 0xbb, 0x01, 0xc5, 0x4e, 0xd3, 0xd0, 0xa4, 0x52, 0xc7,
+	0x05, 0x77, 0xf6, 0xf1, 0xf1, 0xf7, 0x9d, 0xf3, 0xf9, 0xb3, 0x4d, 0x1e, 0x45, 0xb1, 0x40, 0xd1,
+	0x93, 0x01, 0x93, 0x3e, 0x0f, 0xbd, 0x7c, 0x60, 0xa9, 0x38, 0x5d, 0x05, 0xf4, 0x21, 0x86, 0xe4,
+	0xdc, 0x9a, 0x2c, 0xb4, 0x37, 0x00, 0xfd, 0xde, 0xc5, 0x3e, 0x0b, 0x22, 0x9f, 0xed, 0xf7, 0x1c,
+	0x60, 0x23, 0x11, 0xda, 0x4e, 0x20, 0x46, 0x67, 0x7a, 0x4f, 0xbb, 0xeb, 0x71, 0xf4, 0x13, 0xc7,
+	0x1a, 0x89, 0xf3, 0x9e, 0x27, 0x3c, 0xd1, 0x53, 0x61, 0x27, 0x39, 0x55, 0x33, 0xcd, 0x97, 0x8e,
+	0x74, 0xba, 0xf9, 0x82, 0x3c, 0x38, 0xe4, 0x9e, 0x0f, 0x12, 0x0f, 0x10, 0x41, 0x22, 0x43, 0x2e,
+	0xc2, 0x21, 0x7c, 0x4c, 0x40, 0x22, 0xdd, 0x26, 0xff, 0x5d, 0xb0, 0x80, 0xbb, 0x0c, 0x45, 0x6c,
+	0x73, 0x57, 0xb6, 0x8c, 0xcd, 0xfa, 0xce, 0xd2, 0xa0, 0xd6, 0x32, 0x86, 0x8d, 0x7c, 0xe1, 0xc8,
+	0x95, 0xe6, 0x19, 0x69, 0x57, 0xa1, 0xc8, 0x48, 0x84, 0x12, 0xe8, 0x2b, 0xd2, 0x60, 0xd3, 0xb0,
+	0x46, 0x59, 0xe9, 0x6f, 0x59, 0xa5, 0xee, 0xac, 0x32, 0x88, 0x26, 0x2b, 0x6e, 0x37, 0x7f, 0x18,
+	0x84, 0x96, 0x13, 0xe9, 0x16, 0x69, 0x14, 0x8b, 0x6d, 0x19, 0x9b, 0x46, 0x56, 0xeb, 0x4a, 0xa1,
+	0x56, 0xca, 0xc8, 0xba, 0xaf, 0x37, 0xdb, 0x52, 0x24, 0xf1, 0x08, 0x6c, 0x88, 0xc4, 0xc8, 0x6f,
+	0xd5, 0x54, 0x7a, 0xef, 0xf6, 0x7a, 0x63, 0xb7, 0xa0, 0x60, 0x14, 0x8f, 0xe5, 0x39, 0x43, 0x3e,
+	0x0a, 0x98, 0x23, 0x7b, 0x80, 0x7e, 0xbf, 0x8b, 0xe3, 0x08, 0xa4, 0xf5, 0x52, 0x6d, 0x32, 0x86,
+	0x34, 0x03, 0x3b, 0x56, 0x58, 0x2a, 0x4a, 0xed, 0x29, 0x05, 0xb2, 0xd8, 0x03, 0xcc, 0x28, 0xea,
+	0x8a, 0xa2, 0x7b, 0x27, 0x8a, 0x9c, 0xe0, 0x44, 0x21, 0xa9, 0x98, 0x89, 0xa4, 0xf5, 0x26, 0x16,
+	0x91, 0x90, 0x10, 0x1f, 0x67, 0xd2, 0xe5, 0x62, 0x7f, 0x20, 0xab, 0x51, 0xb6, 0x66, 0x4f, 0x74,
+	0xcd, 0x14, 0xdf, 0x9e, 0x2a, 0x0e, 0xe8, 0x5b, 0x13, 0x17, 0x59, 0xb3, 0x58, 0x4a, 0xb4, 0x66,
+	0x34, 0x13, 0x35, 0xbb, 0x64, 0x59, 0x8d, 0x99, 0x13, 0x00, 0xdd, 0x24, 0xcb, 0x72, 0x32, 0x51,
+	0x52, 0xff, 0xab, 0x76, 0x4d, 0x83, 0x69, 0x91, 0xfa, 0x78, 0xaa, 0x8b, 0x64, 0xd9, 0xda, 0xa2,
+	0x45, 0xce, 0x62, 0xe9, 0x22, 0xd9, 0x4c, 0xd4, 0xfc, 0x6a, 0x90, 0x7b, 0xba, 0x1f, 0x16, 0x1c,
+	0x72, 0x89, 0x22, 0x1e, 0xd3, 0xb7, 0x84, 0xa8, 0x03, 0xb0, 0x1d, 0x8e, 0x52, 0x15, 0xdb, 0x18,
+	0xf4, 0x6f, 0xaf, 0x37, 0xf6, 0xe6, 0x9e, 0x82, 0x27, 0xba, 0x0e, 0xc7, 0x53, 0x0e, 0x81, 0x6b,
+	0x0d, 0x38, 0x06, 0x5c, 0x62, 0xda, 0x9c, 0x42, 0x19, 0x70, 0x94, 0xa9, 0x8b, 0x02, 0x96, 0x52,
+	0xeb, 0xa3, 0xb5, 0x2f, 0x63, 0x8e, 0x08, 0xe1, 0x6f, 0xbb, 0x48, 0x83, 0xa9, 0xe9, 0x7b, 0x0d,
+	0x65, 0x7e, 0xa9, 0x11, 0x5a, 0xf0, 0xf7, 0xa4, 0x19, 0x8f, 0x34, 0x33, 0x53, 0xa1, 0xc8, 0x1c,
+	0x9c, 0x29, 0xf7, 0xac, 0xe2, 0x42, 0x95, 0x01, 0x2c, 0x6d, 0xa4, 0x13, 0x91, 0x39, 0x36, 0xc4,
+	0x78, 0xac, 0xb4, 0xfc, 0x1f, 0x7f, 0x59, 0xf8, 0x03, 0x2d, 0xb6, 0x0f, 0xc8, 0x5a, 0x45, 0x35,
+	0xb4, 0x49, 0xea, 0x67, 0x30, 0xd6, 0x17, 0x78, 0x98, 0x0e, 0xe9, 0x3a, 0xf9, 0xeb, 0x82, 0x05,
+	0x09, 0x68, 0xf2, 0xa1, 0x9e, 0x3c, 0xaf, 0x3d, 0x35, 0xfa, 0x57, 0x4b, 0xe4, 0x1f, 0x75, 0xf8,
+	0x10, 0xd3, 0x84, 0xdc, 0x3f, 0x92, 0xb9, 0x45, 0x8b, 0x6f, 0xc3, 0xee, 0x1c, 0x53, 0x1d, 0x85,
+	0x2e, 0x7c, 0x02, 0xb7, 0x90, 0xda, 0x7e, 0x3c, 0x57, 0xc5, 0xb2, 0x8f, 0xcd, 0xfa, 0xe7, 0x9a,
+	0x41, 0x91, 0x34, 0x0b, 0xb4, 0x83, 0xf4, 0x2d, 0xa6, 0xd6, 0x1c, 0xc2, 0x63, 0xee, 0x85, 0xe0,
+	0x0e, 0xd4, 0xb3, 0xad, 0x32, 0x0f, 0x81, 0xb9, 0x10, 0x57, 0xb2, 0xce, 0xbb, 0xe2, 0x9a, 0x35,
+	0x24, 0x9d, 0xea, 0x66, 0x5f, 0x8b, 0x77, 0x91, 0xcb, 0x10, 0xee, 0xd2, 0xf4, 0xc3, 0x0a, 0xfa,
+	0x1c, 0x5b, 0xf3, 0x79, 0xa4, 0x35, 0xdb, 0x65, 0xce, 0xb4, 0x33, 0x87, 0xa9, 0xdc, 0xe7, 0x02,
+	0x44, 0x97, 0x64, 0xad, 0xfc, 0xba, 0x4b, 0xba, 0xb7, 0xd0, 0x77, 0x91, 0xfd, 0x5c, 0xed, 0xee,
+	0x82, 0xd9, 0x05, 0x45, 0x07, 0x8d, 0xab, 0x9b, 0x8e, 0xf1, 0xed, 0xa6, 0x63, 0x7c, 0xbf, 0xe9,
+	0x18, 0xce, 0xdf, 0xea, 0x7f, 0x7c, 0xf2, 0x33, 0x00, 0x00, 0xff, 0xff, 0x41, 0x77, 0x31, 0x4d,
+	0xa3, 0x07, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -513,6 +529,7 @@ type SlasherClient interface {
 	IsSlashableBlock(ctx context.Context, in *v1alpha1.SignedBeaconBlockHeader, opts ...grpc.CallOption) (*ProposerSlashingResponse, error)
 	IsSlashableAttestationNoUpdate(ctx context.Context, in *v1alpha1.IndexedAttestation, opts ...grpc.CallOption) (*Slashable, error)
 	IsSlashableBlockNoUpdate(ctx context.Context, in *v1alpha1.BeaconBlockHeader, opts ...grpc.CallOption) (*Slashable, error)
+	HighestAttestations(ctx context.Context, in *HighestAttestationRequest, opts ...grpc.CallOption) (*HighestAttestationResponse, error)
 }
 
 type slasherClient struct {
@@ -523,6 +540,7 @@ func NewSlasherClient(cc *grpc.ClientConn) SlasherClient {
 	return &slasherClient{cc}
 }
 
+// Deprecated: Do not use.
 func (c *slasherClient) IsSlashableAttestation(ctx context.Context, in *v1alpha1.IndexedAttestation, opts ...grpc.CallOption) (*AttesterSlashingResponse, error) {
 	out := new(AttesterSlashingResponse)
 	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableAttestation", in, out, opts...)
@@ -532,6 +550,7 @@ func (c *slasherClient) IsSlashableAttestation(ctx context.Context, in *v1alpha1
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *slasherClient) IsSlashableBlock(ctx context.Context, in *v1alpha1.SignedBeaconBlockHeader, opts ...grpc.CallOption) (*ProposerSlashingResponse, error) {
 	out := new(ProposerSlashingResponse)
 	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableBlock", in, out, opts...)
@@ -541,6 +560,7 @@ func (c *slasherClient) IsSlashableBlock(ctx context.Context, in *v1alpha1.Signe
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *slasherClient) IsSlashableAttestationNoUpdate(ctx context.Context, in *v1alpha1.IndexedAttestation, opts ...grpc.CallOption) (*Slashable, error) {
 	out := new(Slashable)
 	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableAttestationNoUpdate", in, out, opts...)
@@ -550,9 +570,20 @@ func (c *slasherClient) IsSlashableAttestationNoUpdate(ctx context.Context, in *
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *slasherClient) IsSlashableBlockNoUpdate(ctx context.Context, in *v1alpha1.BeaconBlockHeader, opts ...grpc.CallOption) (*Slashable, error) {
 	out := new(Slashable)
 	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/IsSlashableBlockNoUpdate", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Deprecated: Do not use.
+func (c *slasherClient) HighestAttestations(ctx context.Context, in *HighestAttestationRequest, opts ...grpc.CallOption) (*HighestAttestationResponse, error) {
+	out := new(HighestAttestationResponse)
+	err := c.cc.Invoke(ctx, "/ethereum.slashing.Slasher/HighestAttestations", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -565,6 +596,7 @@ type SlasherServer interface {
 	IsSlashableBlock(context.Context, *v1alpha1.SignedBeaconBlockHeader) (*ProposerSlashingResponse, error)
 	IsSlashableAttestationNoUpdate(context.Context, *v1alpha1.IndexedAttestation) (*Slashable, error)
 	IsSlashableBlockNoUpdate(context.Context, *v1alpha1.BeaconBlockHeader) (*Slashable, error)
+	HighestAttestations(context.Context, *HighestAttestationRequest) (*HighestAttestationResponse, error)
 }
 
 // UnimplementedSlasherServer can be embedded to have forward compatible implementations.
@@ -582,6 +614,9 @@ func (*UnimplementedSlasherServer) IsSlashableAttestationNoUpdate(ctx context.Co
 }
 func (*UnimplementedSlasherServer) IsSlashableBlockNoUpdate(ctx context.Context, req *v1alpha1.BeaconBlockHeader) (*Slashable, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method IsSlashableBlockNoUpdate not implemented")
+}
+func (*UnimplementedSlasherServer) HighestAttestations(ctx context.Context, req *HighestAttestationRequest) (*HighestAttestationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HighestAttestations not implemented")
 }
 
 func RegisterSlasherServer(s *grpc.Server, srv SlasherServer) {
@@ -660,6 +695,24 @@ func _Slasher_IsSlashableBlockNoUpdate_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Slasher_HighestAttestations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HighestAttestationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SlasherServer).HighestAttestations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/ethereum.slashing.Slasher/HighestAttestations",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SlasherServer).HighestAttestations(ctx, req.(*HighestAttestationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 var _Slasher_serviceDesc = grpc.ServiceDesc{
 	ServiceName: "ethereum.slashing.Slasher",
 	HandlerType: (*SlasherServer)(nil),
@@ -679,6 +732,10 @@ var _Slasher_serviceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "IsSlashableBlockNoUpdate",
 			Handler:    _Slasher_IsSlashableBlockNoUpdate_Handler,
+		},
+		{
+			MethodName: "HighestAttestations",
+			Handler:    _Slasher_HighestAttestations_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
@@ -1297,10 +1354,7 @@ func (m *HighestAttestationRequest) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1385,10 +1439,7 @@ func (m *HighestAttestationResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1466,7 +1517,7 @@ func (m *HighestAttestation) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.HighestSourceEpoch |= uint64(b&0x7F) << shift
+				m.HighestSourceEpoch |= github_com_prysmaticlabs_eth2_types.Epoch(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1485,7 +1536,7 @@ func (m *HighestAttestation) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.HighestTargetEpoch |= uint64(b&0x7F) << shift
+				m.HighestTargetEpoch |= github_com_prysmaticlabs_eth2_types.Epoch(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1496,10 +1547,7 @@ func (m *HighestAttestation) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1584,10 +1632,7 @@ func (m *ProposerSlashingResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1658,10 +1703,7 @@ func (m *Slashable) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1746,10 +1788,7 @@ func (m *AttesterSlashingResponse) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1842,7 +1881,7 @@ func (m *ProposalHistory) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.LatestEpochWritten |= uint64(b&0x7F) << shift
+				m.LatestEpochWritten |= github_com_prysmaticlabs_eth2_types.Epoch(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1853,10 +1892,7 @@ func (m *ProposalHistory) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {
@@ -1989,7 +2025,7 @@ func (m *AttestationHistory) Unmarshal(dAtA []byte) error {
 					if err != nil {
 						return err
 					}
-					if skippy < 0 {
+					if (skippy < 0) || (iNdEx+skippy) < 0 {
 						return ErrInvalidLengthSlashing
 					}
 					if (iNdEx + skippy) > postIndex {
@@ -2014,7 +2050,7 @@ func (m *AttestationHistory) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.LatestEpochWritten |= uint64(b&0x7F) << shift
+				m.LatestEpochWritten |= github_com_prysmaticlabs_eth2_types.Epoch(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -2025,10 +2061,7 @@ func (m *AttestationHistory) Unmarshal(dAtA []byte) error {
 			if err != nil {
 				return err
 			}
-			if skippy < 0 {
-				return ErrInvalidLengthSlashing
-			}
-			if (iNdEx + skippy) < 0 {
+			if (skippy < 0) || (iNdEx+skippy) < 0 {
 				return ErrInvalidLengthSlashing
 			}
 			if (iNdEx + skippy) > l {

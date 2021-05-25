@@ -7,22 +7,17 @@ import (
 	"strings"
 
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/cmd/validator/flags"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/promptutil"
+	"github.com/prysmaticlabs/prysm/validator/accounts/iface"
 	"github.com/prysmaticlabs/prysm/validator/accounts/prompt"
 	"github.com/prysmaticlabs/prysm/validator/accounts/wallet"
-	"github.com/prysmaticlabs/prysm/validator/flags"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
+	"github.com/prysmaticlabs/prysm/validator/keymanager/derived"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/imported"
 	"github.com/urfave/cli/v2"
 )
-
-// DeleteAccountConfig specifies parameters to run the delete account function.
-type DeleteAccountConfig struct {
-	Wallet     *wallet.Wallet
-	Keymanager keymanager.IKeymanager
-	PublicKeys [][]byte
-}
 
 // DeleteAccountCli deletes the accounts that the user requests to be deleted from the wallet.
 // This function uses the CLI to extract necessary values.
@@ -33,11 +28,11 @@ func DeleteAccountCli(cliCtx *cli.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "could not open wallet")
 	}
-	keymanager, err := w.InitializeKeymanager(cliCtx.Context, false /* skip mnemonic confirm */)
+	kManager, err := w.InitializeKeymanager(cliCtx.Context, iface.InitKeymanagerConfig{ListenForChanges: false})
 	if err != nil {
-		return errors.Wrap(err, "could not initialize keymanager")
+		return errors.Wrap(err, ErrCouldNotInitializeKeymanager)
 	}
-	validatingPublicKeys, err := keymanager.FetchValidatingPublicKeys(cliCtx.Context)
+	validatingPublicKeys, err := kManager.FetchValidatingPublicKeys(cliCtx.Context)
 	if err != nil {
 		return err
 	}
@@ -72,7 +67,7 @@ func DeleteAccountCli(cliCtx *cli.Context) error {
 			if err != nil {
 				return err
 			}
-			if strings.ToLower(resp) == "n" {
+			if strings.EqualFold(resp, "n") {
 				return nil
 			}
 		} else {
@@ -86,24 +81,27 @@ func DeleteAccountCli(cliCtx *cli.Context) error {
 			if err != nil {
 				return err
 			}
-			if strings.ToLower(resp) == "n" {
+			if strings.EqualFold(resp, "n") {
 				return nil
 			}
 		}
 	}
-	if err := DeleteAccount(cliCtx.Context, &DeleteAccountConfig{
-		Wallet:     w,
-		Keymanager: keymanager,
-		PublicKeys: rawPublicKeys,
+	if err := DeleteAccount(cliCtx.Context, &Config{
+		Wallet:           w,
+		Keymanager:       kManager,
+		DeletePublicKeys: rawPublicKeys,
 	}); err != nil {
 		return err
 	}
-	log.WithField("publicKeys", allAccountStr).Info("Accounts deleted")
+	log.WithField("publicKeys", allAccountStr).Warn(
+		"Attempted to delete accounts. IMPORTANT: please run `validator accounts list` to ensure " +
+			"the public keys are indeed deleted. If they are still there, please file an issue at " +
+			"https://github.com/prysmaticlabs/prysm/issues/new")
 	return nil
 }
 
 // DeleteAccount deletes the accounts that the user requests to be deleted from the wallet.
-func DeleteAccount(ctx context.Context, cfg *DeleteAccountConfig) error {
+func DeleteAccount(ctx context.Context, cfg *Config) error {
 	switch cfg.Wallet.KeymanagerKind() {
 	case keymanager.Remote:
 		return errors.New("cannot delete accounts for a remote keymanager")
@@ -112,18 +110,29 @@ func DeleteAccount(ctx context.Context, cfg *DeleteAccountConfig) error {
 		if !ok {
 			return errors.New("not a imported keymanager")
 		}
-		if len(cfg.PublicKeys) == 1 {
+		if len(cfg.DeletePublicKeys) == 1 {
 			log.Info("Deleting account...")
 		} else {
 			log.Info("Deleting accounts...")
 		}
-		if err := km.DeleteAccounts(ctx, cfg.PublicKeys); err != nil {
+		if err := km.DeleteAccounts(ctx, cfg.DeletePublicKeys); err != nil {
 			return errors.Wrap(err, "could not delete accounts")
 		}
 	case keymanager.Derived:
-		return errors.New("cannot delete accounts for a derived keymanager")
+		km, ok := cfg.Keymanager.(*derived.Keymanager)
+		if !ok {
+			return errors.New("not a derived keymanager")
+		}
+		if len(cfg.DeletePublicKeys) == 1 {
+			log.Info("Deleting account...")
+		} else {
+			log.Info("Deleting accounts...")
+		}
+		if err := km.DeleteAccounts(ctx, cfg.DeletePublicKeys); err != nil {
+			return errors.Wrap(err, "could not delete accounts")
+		}
 	default:
-		return fmt.Errorf("keymanager kind %s not supported", cfg.Wallet.KeymanagerKind())
+		return fmt.Errorf(errKeymanagerNotSupported, cfg.Wallet.KeymanagerKind())
 	}
 	return nil
 }

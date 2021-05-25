@@ -10,7 +10,6 @@ import (
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
-	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	regularsync "github.com/prysmaticlabs/prysm/beacon-chain/sync"
 	mockSync "github.com/prysmaticlabs/prysm/beacon-chain/sync/initial-sync/testing"
@@ -59,9 +58,14 @@ func init() {
 		StateNotifier:       (&mock.ChainService{}).StateNotifier(),
 		AttestationNotifier: (&mock.ChainService{}).OperationNotifier(),
 		InitialSync:         &mockSync.Sync{IsSyncing: false},
-		StateSummaryCache:   cache.NewStateSummaryCache(),
 		BlockNotifier:       nil,
 	})
+}
+
+// FuzzP2PRPCStatus wraps BeaconFuzzP2PRPCStatus in a go-fuzz compatible interface
+func FuzzP2PRPCStatus(b []byte) int {
+	BeaconFuzzP2PRPCStatus(b)
+	return 0
 }
 
 // BeaconFuzzP2PRPCStatus implements libfuzzer and beacon fuzz interface.

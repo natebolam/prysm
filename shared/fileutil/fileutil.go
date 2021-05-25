@@ -1,16 +1,20 @@
 package fileutil
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/user"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/prysmaticlabs/prysm/shared/params"
-
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/shared/params"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -26,6 +30,51 @@ func ExpandPath(p string) (string, error) {
 		}
 	}
 	return filepath.Abs(path.Clean(os.ExpandEnv(p)))
+}
+
+// MkdirAll takes in a path, expands it if necessary, and looks through the
+// permissions of every directory along the path, ensuring we are not attempting
+// to overwrite any existing permissions. Finally, creates the directory accordingly
+// with standardized, Prysm project permissions. This is the static-analysis enforced
+// method for creating a directory programmatically in Prysm.
+func MkdirAll(dirPath string) error {
+	expanded, err := ExpandPath(dirPath)
+	if err != nil {
+		return err
+	}
+	exists, err := HasDir(expanded)
+	if err != nil {
+		return err
+	}
+	if exists {
+		info, err := os.Stat(expanded)
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm() != params.BeaconIoConfig().ReadWriteExecutePermissions {
+			return errors.New("dir already exists without proper 0700 permissions")
+		}
+	}
+	return os.MkdirAll(expanded, params.BeaconIoConfig().ReadWriteExecutePermissions)
+}
+
+// WriteFile is the static-analysis enforced method for writing binary data to a file
+// in Prysm, enforcing a single entrypoint with standardized permissions.
+func WriteFile(file string, data []byte) error {
+	expanded, err := ExpandPath(file)
+	if err != nil {
+		return err
+	}
+	if FileExists(expanded) {
+		info, err := os.Stat(expanded)
+		if err != nil {
+			return err
+		}
+		if info.Mode() != params.BeaconIoConfig().ReadWritePermissions {
+			return errors.New("file already exists without proper 0600 permissions")
+		}
+	}
+	return ioutil.WriteFile(expanded, data, params.BeaconIoConfig().ReadWritePermissions)
 }
 
 // HomeDir for a user.
@@ -55,6 +104,16 @@ func HasDir(dirPath string) (bool, error) {
 	return info.IsDir(), err
 }
 
+// HasReadWritePermissions checks if file at a path has proper
+// 0600 permissions set.
+func HasReadWritePermissions(itemPath string) (bool, error) {
+	info, err := os.Stat(itemPath)
+	if err != nil {
+		return false, err
+	}
+	return info.Mode() == params.BeaconIoConfig().ReadWritePermissions, nil
+}
+
 // FileExists returns true if a file is not a directory and exists
 // at the specified path.
 func FileExists(filename string) bool {
@@ -72,6 +131,38 @@ func FileExists(filename string) bool {
 	return info != nil && !info.IsDir()
 }
 
+// RecursiveFileFind returns true, and the path,  if a file is not a directory and exists
+// at  dir or any of its subdirectories.  Finds the first instant based on the Walk order and returns.
+// Define non-fatal error to stop the recursive directory walk
+var stopWalk = errors.New("stop walking")
+
+// RecursiveFileFind searches for file in a directory and its subdirectories.
+func RecursiveFileFind(filename, dir string) (bool, string, error) {
+	var found bool
+	var fpath string
+	dir = filepath.Clean(dir)
+	found = false
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		// checks if its a file  and has the exact name as the filename
+		// need to break the walk function by using a non-fatal error
+		if !info.IsDir() && filename == info.Name() {
+			found = true
+			fpath = path
+			return stopWalk
+		}
+
+		// no errors or file found
+		return nil
+	})
+	if err != nil && err != stopWalk {
+		return false, "", err
+	}
+	return found, fpath, nil
+}
+
 // ReadFileAsBytes expands a file name's absolute path and reads it as bytes from disk.
 func ReadFileAsBytes(filename string) ([]byte, error) {
 	filePath, err := ExpandPath(filename)
@@ -83,15 +174,122 @@ func ReadFileAsBytes(filename string) ([]byte, error) {
 
 // CopyFile copy a file from source to destination path.
 func CopyFile(src, dst string) error {
-	input, err := ioutil.ReadFile(src)
+	if !FileExists(src) {
+		return errors.New("source file does not exist at provided path")
+	}
+	f, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-
-	err = ioutil.WriteFile(dst, input, params.BeaconIoConfig().ReadWritePermissions)
+	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, params.BeaconIoConfig().ReadWritePermissions)
 	if err != nil {
-		err := errors.Wrapf(err, "error creating file %s", dst)
 		return err
+	}
+	_, err = io.Copy(dstFile, f)
+	return err
+}
+
+// CopyDir copies contents of one directory into another, recursively.
+func CopyDir(src, dst string) error {
+	dstExists, err := HasDir(dst)
+	if err != nil {
+		return err
+	}
+	if dstExists {
+		return errors.New("destination directory already exists")
+	}
+	fds, err := ioutil.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	if err := MkdirAll(dst); err != nil {
+		return errors.Wrapf(err, "error creating directory: %s", dst)
+	}
+	for _, fd := range fds {
+		srcPath := path.Join(src, fd.Name())
+		dstPath := path.Join(dst, fd.Name())
+		if fd.IsDir() {
+			if err = CopyDir(srcPath, dstPath); err != nil {
+				return errors.Wrapf(err, "error copying directory %s -> %s", srcPath, dstPath)
+			}
+		} else {
+			if err = CopyFile(srcPath, dstPath); err != nil {
+				return errors.Wrapf(err, "error copying file %s -> %s", srcPath, dstPath)
+			}
+		}
 	}
 	return nil
+}
+
+// DirsEqual checks whether two directories have the same content.
+func DirsEqual(src, dst string) bool {
+	hash1, err := HashDir(src)
+	if err != nil {
+		return false
+	}
+
+	hash2, err := HashDir(dst)
+	if err != nil {
+		return false
+	}
+
+	return hash1 == hash2
+}
+
+// HashDir calculates and returns hash of directory: each file's hash is calculated and saved along
+// with the file name into the list, after which list is hashed to produce the final signature.
+// Implementation is based on https://github.com/golang/mod/blob/release-branch.go1.15/sumdb/dirhash/hash.go
+func HashDir(dir string) (string, error) {
+	files, err := DirFiles(dir)
+	if err != nil {
+		return "", err
+	}
+
+	h := sha256.New()
+	files = append([]string(nil), files...)
+	sort.Strings(files)
+	for _, file := range files {
+		fd, err := os.Open(filepath.Join(dir, file))
+		if err != nil {
+			return "", err
+		}
+		hf := sha256.New()
+		_, err = io.Copy(hf, fd)
+		if err != nil {
+			return "", err
+		}
+		if err := fd.Close(); err != nil {
+			return "", err
+		}
+		if _, err := fmt.Fprintf(h, "%x  %s\n", hf.Sum(nil), file); err != nil {
+			return "", err
+		}
+	}
+	return "hashdir:" + base64.StdEncoding.EncodeToString(h.Sum(nil)), nil
+}
+
+// DirFiles returns list of files found within a given directory and its sub-directories.
+// Directory prefix will not be included as a part of returned file string i.e. for a file located
+// in "dir/foo/bar" only "foo/bar" part will be returned.
+func DirFiles(dir string) ([]string, error) {
+	var files []string
+	dir = filepath.Clean(dir)
+	err := filepath.Walk(dir, func(file string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		relFile := file
+		if dir != "." {
+			relFile = file[len(dir)+1:]
+		}
+		files = append(files, filepath.ToSlash(relFile))
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return files, nil
 }

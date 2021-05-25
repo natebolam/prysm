@@ -5,16 +5,17 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	v "github.com/prysmaticlabs/prysm/beacon-chain/core/validators"
-	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	iface "github.com/prysmaticlabs/prysm/beacon-chain/state/interface"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
 )
 
 // ValidatorAlreadyExitedMsg defines a message saying that a validator has already exited.
-var ValidatorAlreadyExitedMsg = "validator has already submitted an exit, which will take place at epoch"
+var ValidatorAlreadyExitedMsg = "has already submitted an exit, which will take place at epoch"
 
 // ValidatorCannotExitYetMsg defines a message saying that a validator cannot exit
 // because it has not been active long enough.
@@ -25,35 +26,28 @@ var ValidatorCannotExitYetMsg = "validator has not been active long enough to ex
 // should exit the state's validator registry.
 //
 // Spec pseudocode definition:
-//   def process_voluntary_exit(state: BeaconState, exit: VoluntaryExit) -> None:
-//    """
-//    Process ``VoluntaryExit`` operation.
-//    """
-//    validator = state.validator_registry[exit.validator_index]
+//   def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVoluntaryExit) -> None:
+//    voluntary_exit = signed_voluntary_exit.message
+//    validator = state.validators[voluntary_exit.validator_index]
 //    # Verify the validator is active
 //    assert is_active_validator(validator, get_current_epoch(state))
-//    # Verify the validator has not yet exited
+//    # Verify exit has not been initiated
 //    assert validator.exit_epoch == FAR_FUTURE_EPOCH
 //    # Exits must specify an epoch when they become valid; they are not valid before then
-//    assert get_current_epoch(state) >= exit.epoch
+//    assert get_current_epoch(state) >= voluntary_exit.epoch
 //    # Verify the validator has been active long enough
-//    assert get_current_epoch(state) >= validator.activation_epoch + PERSISTENT_COMMITTEE_PERIOD
+//    assert get_current_epoch(state) >= validator.activation_epoch + SHARD_COMMITTEE_PERIOD
 //    # Verify signature
-//    domain = get_domain(state, DOMAIN_VOLUNTARY_EXIT, exit.epoch)
-//    assert bls_verify(validator.pubkey, signing_root(exit), exit.signature, domain)
+//    domain = get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch)
+//    signing_root = compute_signing_root(voluntary_exit, domain)
+//    assert bls.Verify(validator.pubkey, signing_root, signed_voluntary_exit.signature)
 //    # Initiate exit
-//    initiate_validator_exit(state, exit.validator_index)
+//    initiate_validator_exit(state, voluntary_exit.validator_index)
 func ProcessVoluntaryExits(
 	_ context.Context,
-	beaconState *stateTrie.BeaconState,
-	b *ethpb.SignedBeaconBlock,
-) (*stateTrie.BeaconState, error) {
-	if b.Block == nil || b.Block.Body == nil {
-		return nil, errors.New("block and block body can't be nil")
-	}
-
-	body := b.Block.Body
-	exits := body.VoluntaryExits
+	beaconState iface.BeaconState,
+	exits []*ethpb.SignedVoluntaryExit,
+) (iface.BeaconState, error) {
 	for idx, exit := range exits {
 		if exit == nil || exit.Exit == nil {
 			return nil, errors.New("nil voluntary exit in block body")
@@ -73,59 +67,33 @@ func ProcessVoluntaryExits(
 	return beaconState, nil
 }
 
-// ProcessVoluntaryExitsNoVerifySignature processes all the voluntary exits in
-// a block body, without verifying their BLS signatures.
-// This function is here to satisfy fuzz tests.
-func ProcessVoluntaryExitsNoVerifySignature(
-	beaconState *stateTrie.BeaconState,
-	body *ethpb.BeaconBlockBody,
-) (*stateTrie.BeaconState, error) {
-	exits := body.VoluntaryExits
-
-	for idx, exit := range exits {
-		if exit == nil || exit.Exit == nil {
-			return nil, errors.New("nil exit")
-		}
-		val, err := beaconState.ValidatorAtIndexReadOnly(exit.Exit.ValidatorIndex)
-		if err != nil {
-			return nil, err
-		}
-		if err := verifyExitConditions(val, beaconState.Slot(), exit.Exit); err != nil {
-			return nil, err
-		}
-		// Validate that fork and genesis root are valid.
-		_, err = helpers.Domain(beaconState.Fork(), exit.Exit.Epoch, params.BeaconConfig().DomainVoluntaryExit, beaconState.GenesisValidatorRoot())
-		if err != nil {
-			return nil, err
-		}
-		beaconState, err = v.InitiateValidatorExit(beaconState, exit.Exit.ValidatorIndex)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to process voluntary exit at index %d", idx)
-		}
-	}
-	return beaconState, nil
-}
-
 // VerifyExitAndSignature implements the spec defined validation for voluntary exits.
 //
 // Spec pseudocode definition:
-//   def process_voluntary_exit(state: BeaconState, exit: VoluntaryExit) -> None:
-//    """
-//    Process ``VoluntaryExit`` operation.
-//    """
-//    validator = state.validator_registry[exit.validator_index]
+//   def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVoluntaryExit) -> None:
+//    voluntary_exit = signed_voluntary_exit.message
+//    validator = state.validators[voluntary_exit.validator_index]
 //    # Verify the validator is active
 //    assert is_active_validator(validator, get_current_epoch(state))
-//    # Verify the validator has not yet exited
+//    # Verify exit has not been initiated
 //    assert validator.exit_epoch == FAR_FUTURE_EPOCH
 //    # Exits must specify an epoch when they become valid; they are not valid before then
-//    assert get_current_epoch(state) >= exit.epoch
+//    assert get_current_epoch(state) >= voluntary_exit.epoch
 //    # Verify the validator has been active long enough
-//    assert get_current_epoch(state) >= validator.activation_epoch + PERSISTENT_COMMITTEE_PERIOD
+//    assert get_current_epoch(state) >= validator.activation_epoch + SHARD_COMMITTEE_PERIOD
 //    # Verify signature
-//    domain = get_domain(state, DOMAIN_VOLUNTARY_EXIT, exit.epoch)
-//    assert bls_verify(validator.pubkey, signing_root(exit), exit.signature, domain)
-func VerifyExitAndSignature(validator *stateTrie.ReadOnlyValidator, currentSlot uint64, fork *pb.Fork, signed *ethpb.SignedVoluntaryExit, genesisRoot []byte) error {
+//    domain = get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch)
+//    signing_root = compute_signing_root(voluntary_exit, domain)
+//    assert bls.Verify(validator.pubkey, signing_root, signed_voluntary_exit.signature)
+//    # Initiate exit
+//    initiate_validator_exit(state, voluntary_exit.validator_index)
+func VerifyExitAndSignature(
+	validator iface.ReadOnlyValidator,
+	currentSlot types.Slot,
+	fork *pb.Fork,
+	signed *ethpb.SignedVoluntaryExit,
+	genesisRoot []byte,
+) error {
 	if signed == nil || signed.Exit == nil {
 		return errors.New("nil exit")
 	}
@@ -148,20 +116,24 @@ func VerifyExitAndSignature(validator *stateTrie.ReadOnlyValidator, currentSlot 
 // verifyExitConditions implements the spec defined validation for voluntary exits(excluding signatures).
 //
 // Spec pseudocode definition:
-//   def process_voluntary_exit(state: BeaconState, exit: VoluntaryExit) -> None:
-//    """
-//    Process ``VoluntaryExit`` operation.
-//    """
-//    validator = state.validator_registry[exit.validator_index]
+//   def process_voluntary_exit(state: BeaconState, signed_voluntary_exit: SignedVoluntaryExit) -> None:
+//    voluntary_exit = signed_voluntary_exit.message
+//    validator = state.validators[voluntary_exit.validator_index]
 //    # Verify the validator is active
 //    assert is_active_validator(validator, get_current_epoch(state))
-//    # Verify the validator has not yet exited
+//    # Verify exit has not been initiated
 //    assert validator.exit_epoch == FAR_FUTURE_EPOCH
 //    # Exits must specify an epoch when they become valid; they are not valid before then
-//    assert get_current_epoch(state) >= exit.epoch
+//    assert get_current_epoch(state) >= voluntary_exit.epoch
 //    # Verify the validator has been active long enough
 //    assert get_current_epoch(state) >= validator.activation_epoch + SHARD_COMMITTEE_PERIOD
-func verifyExitConditions(validator *stateTrie.ReadOnlyValidator, currentSlot uint64, exit *ethpb.VoluntaryExit) error {
+//    # Verify signature
+//    domain = get_domain(state, DOMAIN_VOLUNTARY_EXIT, voluntary_exit.epoch)
+//    signing_root = compute_signing_root(voluntary_exit, domain)
+//    assert bls.Verify(validator.pubkey, signing_root, signed_voluntary_exit.signature)
+//    # Initiate exit
+//    initiate_validator_exit(state, voluntary_exit.validator_index)
+func verifyExitConditions(validator iface.ReadOnlyValidator, currentSlot types.Slot, exit *ethpb.VoluntaryExit) error {
 	currentEpoch := helpers.SlotToEpoch(currentSlot)
 	// Verify the validator is active.
 	if !helpers.IsActiveValidatorUsingTrie(validator, currentEpoch) {
@@ -169,7 +141,7 @@ func verifyExitConditions(validator *stateTrie.ReadOnlyValidator, currentSlot ui
 	}
 	// Verify the validator has not yet submitted an exit.
 	if validator.ExitEpoch() != params.BeaconConfig().FarFutureEpoch {
-		return fmt.Errorf("%s: %v", ValidatorAlreadyExitedMsg, validator.ExitEpoch())
+		return fmt.Errorf("validator with index %d %s: %v", exit.ValidatorIndex, ValidatorAlreadyExitedMsg, validator.ExitEpoch())
 	}
 	// Exits must specify an epoch when they become valid; they are not valid before then.
 	if currentEpoch < exit.Epoch {
@@ -178,9 +150,10 @@ func verifyExitConditions(validator *stateTrie.ReadOnlyValidator, currentSlot ui
 	// Verify the validator has been active long enough.
 	if currentEpoch < validator.ActivationEpoch()+params.BeaconConfig().ShardCommitteePeriod {
 		return fmt.Errorf(
-			"%s: %d epochs vs required %d epochs",
+			"%s: %d of %d epochs. Validator will be eligible for exit at epoch %d",
 			ValidatorCannotExitYetMsg,
-			currentEpoch,
+			currentEpoch-validator.ActivationEpoch(),
+			params.BeaconConfig().ShardCommitteePeriod,
 			validator.ActivationEpoch()+params.BeaconConfig().ShardCommitteePeriod,
 		)
 	}

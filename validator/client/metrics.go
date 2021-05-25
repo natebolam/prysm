@@ -6,7 +6,9 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	types "github.com/prysmaticlabs/eth2-types"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/sirupsen/logrus"
@@ -85,6 +87,61 @@ var (
 			"pubkey",
 		},
 	)
+	// ValidatorInclusionDistancesGaugeVec used to keep track of validator inclusion distances by public key.
+	ValidatorInclusionDistancesGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "inclusion_distance",
+			Help:      "Inclusion distance of last attestation.",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
+	// ValidatorAttestedSlotsGaugeVec used to keep track of validator attested slots by public key.
+	ValidatorAttestedSlotsGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "last_attested_slot",
+			Help:      "Last attested slot.",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
+	// ValidatorCorrectlyVotedSourceGaugeVec used to keep track of validator's accuracy on voting source by public key.
+	ValidatorCorrectlyVotedSourceGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "correctly_voted_source",
+			Help:      "True if correctly voted source in last attestation.",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
+	// ValidatorCorrectlyVotedTargetGaugeVec used to keep track of validator's accuracy on voting target by public key.
+	ValidatorCorrectlyVotedTargetGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "correctly_voted_target",
+			Help:      "True if correctly voted target in last attestation.",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
+	// ValidatorCorrectlyVotedHeadGaugeVec used to keep track of validator's accuracy on voting head by public key.
+	ValidatorCorrectlyVotedHeadGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "correctly_voted_head",
+			Help:      "True if correctly voted head in last attestation.",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
 	// ValidatorAttestSuccessVec used to count successful attestations.
 	ValidatorAttestSuccessVec = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -115,15 +172,37 @@ var (
 			"pubkey",
 		},
 	)
+	// ValidatorNextAttestationSlotGaugeVec used to track validator statuses by public key.
+	ValidatorNextAttestationSlotGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "next_attestation_slot",
+			Help:      "validator next scheduled attestation slot",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
+	// ValidatorNextProposalSlotGaugeVec used to track validator statuses by public key.
+	ValidatorNextProposalSlotGaugeVec = promauto.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: "validator",
+			Name:      "next_proposal_slot",
+			Help:      "validator next scheduled proposal slot",
+		},
+		[]string{
+			"pubkey",
+		},
+	)
 )
 
 // LogValidatorGainsAndLosses logs important metrics related to this validator client's
 // responsibilities throughout the beacon chain's lifecycle. It logs absolute accrued rewards
 // and penalties over time, percentage gain/loss, and gives the end user a better idea
 // of how the validator performs with respect to the rest.
-func (v *validator) LogValidatorGainsAndLosses(ctx context.Context, slot uint64) error {
-	if slot%params.BeaconConfig().SlotsPerEpoch != 0 || slot <= params.BeaconConfig().SlotsPerEpoch {
-		// Do nothing unless we are at the start of the epoch, and not in the first epoch.
+func (v *validator) LogValidatorGainsAndLosses(ctx context.Context, slot types.Slot) error {
+	if !helpers.IsEpochEnd(slot) || slot <= params.BeaconConfig().SlotsPerEpoch {
+		// Do nothing unless we are at the end of the epoch, and not in the first epoch.
 		return nil
 	}
 	if !v.logValidatorBalances {
@@ -153,10 +232,10 @@ func (v *validator) LogValidatorGainsAndLosses(ctx context.Context, slot uint64)
 		}
 	}
 
-	prevEpoch := uint64(0)
+	prevEpoch := types.Epoch(0)
 	if slot >= params.BeaconConfig().SlotsPerEpoch {
-		prevEpoch = (slot / params.BeaconConfig().SlotsPerEpoch) - 1
-		if v.voteStats.startEpoch == ^uint64(0) { // Handles unknown first epoch.
+		prevEpoch = types.Epoch(slot/params.BeaconConfig().SlotsPerEpoch) - 1
+		if uint64(v.voteStats.startEpoch) == ^uint64(0) { // Handles unknown first epoch.
 			v.voteStats.startEpoch = prevEpoch
 		}
 	}
@@ -195,6 +274,23 @@ func (v *validator) LogValidatorGainsAndLosses(ctx context.Context, slot uint64)
 			}).Info("Previous epoch voting summary")
 			if v.emitAccountMetrics {
 				ValidatorBalancesGaugeVec.WithLabelValues(fmtKey).Set(newBalance)
+				ValidatorInclusionDistancesGaugeVec.WithLabelValues(fmtKey).Set(float64(resp.InclusionDistances[i]))
+				if resp.CorrectlyVotedSource[i] {
+					ValidatorCorrectlyVotedSourceGaugeVec.WithLabelValues(fmtKey).Set(1)
+				} else {
+					ValidatorCorrectlyVotedSourceGaugeVec.WithLabelValues(fmtKey).Set(0)
+				}
+				if resp.CorrectlyVotedTarget[i] {
+					ValidatorCorrectlyVotedTargetGaugeVec.WithLabelValues(fmtKey).Set(1)
+				} else {
+					ValidatorCorrectlyVotedTargetGaugeVec.WithLabelValues(fmtKey).Set(0)
+				}
+				if resp.CorrectlyVotedHead[i] {
+					ValidatorCorrectlyVotedHeadGaugeVec.WithLabelValues(fmtKey).Set(1)
+				} else {
+					ValidatorCorrectlyVotedHeadGaugeVec.WithLabelValues(fmtKey).Set(0)
+				}
+
 			}
 		}
 		v.prevBalance[pubKeyBytes] = resp.BalancesBeforeEpochTransition[i]
@@ -206,14 +302,14 @@ func (v *validator) LogValidatorGainsAndLosses(ctx context.Context, slot uint64)
 }
 
 // UpdateLogAggregateStats updates and logs the voteStats struct of a validator using the RPC response obtained from LogValidatorGainsAndLosses.
-func (v *validator) UpdateLogAggregateStats(resp *ethpb.ValidatorPerformanceResponse, slot uint64) {
+func (v *validator) UpdateLogAggregateStats(resp *ethpb.ValidatorPerformanceResponse, slot types.Slot) {
 	summary := &v.voteStats
-	currentEpoch := slot / params.BeaconConfig().SlotsPerEpoch
+	currentEpoch := types.Epoch(slot / params.BeaconConfig().SlotsPerEpoch)
 	var included uint64
 	var correctSource, correctTarget, correctHead int
 
 	for i := range resp.PublicKeys {
-		if resp.InclusionSlots[i] != ^uint64(0) {
+		if uint64(resp.InclusionSlots[i]) != ^uint64(0) {
 			included++
 			summary.includedAttestedCount++
 			summary.totalDistance += resp.InclusionDistances[i]
@@ -230,6 +326,12 @@ func (v *validator) UpdateLogAggregateStats(resp *ethpb.ValidatorPerformanceResp
 			correctHead++
 			summary.correctHeads++
 		}
+	}
+
+	// Return early if no attestation got included from previous epoch.
+	// This happens when validators joined half way through epoch and already passed its assigned slot.
+	if included == 0 {
+		return
 	}
 
 	summary.totalAttestedCount += uint64(len(resp.InclusionSlots))

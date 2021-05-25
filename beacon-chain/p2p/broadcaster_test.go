@@ -162,24 +162,7 @@ func TestService_BroadcastAttestation(t *testing.T) {
 		}),
 	}
 
-	msg := &eth.Attestation{
-		AggregationBits: bitfield.NewBitlist(7),
-		Data: &eth.AttestationData{
-			Slot:            0,
-			CommitteeIndex:  0,
-			BeaconBlockRoot: make([]byte, 32),
-			Source: &eth.Checkpoint{
-				Epoch: 0,
-				Root:  make([]byte, 32),
-			},
-			Target: &eth.Checkpoint{
-				Epoch: 0,
-				Root:  make([]byte, 32),
-			},
-		},
-		Signature: make([]byte, 96),
-	}
-
+	msg := testutil.HydrateAttestation(&eth.Attestation{AggregationBits: bitfield.NewBitlist(7)})
 	subnet := uint64(5)
 
 	topic := AttestationSubnetTopicFormat
@@ -306,9 +289,9 @@ func TestService_BroadcastAttestationWithDiscoveryAttempts(t *testing.T) {
 		pubsub.WithStrictSignatureVerification(false),
 	)
 	require.NoError(t, err)
-
 	p := &Service{
 		host:                  hosts[0],
+		ctx:                   context.Background(),
 		pubsub:                ps1,
 		dv5Listener:           listeners[0],
 		joinedTopics:          map[string]*pubsub.Topic{},
@@ -324,6 +307,7 @@ func TestService_BroadcastAttestationWithDiscoveryAttempts(t *testing.T) {
 
 	p2 := &Service{
 		host:                  hosts[1],
+		ctx:                   context.Background(),
 		pubsub:                ps2,
 		dv5Listener:           listeners[1],
 		joinedTopics:          map[string]*pubsub.Topic{},
@@ -337,24 +321,7 @@ func TestService_BroadcastAttestationWithDiscoveryAttempts(t *testing.T) {
 		}),
 	}
 
-	msg := &eth.Attestation{
-		AggregationBits: bitfield.NewBitlist(7),
-		Data: &eth.AttestationData{
-			Slot:            0,
-			CommitteeIndex:  0,
-			BeaconBlockRoot: make([]byte, 32),
-			Source: &eth.Checkpoint{
-				Epoch: 0,
-				Root:  make([]byte, 32),
-			},
-			Target: &eth.Checkpoint{
-				Epoch: 0,
-				Root:  make([]byte, 32),
-			},
-		},
-		Signature: make([]byte, 96),
-	}
-
+	msg := testutil.HydrateAttestation(&eth.Attestation{AggregationBits: bitfield.NewBitlist(7)})
 	topic := AttestationSubnetTopicFormat
 	GossipTypeMapping[reflect.TypeOf(msg)] = topic
 	digest, err := p.forkDigest()
@@ -363,7 +330,11 @@ func TestService_BroadcastAttestationWithDiscoveryAttempts(t *testing.T) {
 
 	// External peer subscribes to the topic.
 	topic += p.Encoding().ProtocolSuffix()
-	sub, err := p2.SubscribeToTopic(topic)
+	// We dont use our internal subscribe method
+	// due to using floodsub over here.
+	tpHandle, err := p2.JoinTopic(topic)
+	require.NoError(t, err)
+	sub, err := tpHandle.Subscribe()
 	require.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond) // libp2p fails without this delay...
@@ -373,7 +344,7 @@ func TestService_BroadcastAttestationWithDiscoveryAttempts(t *testing.T) {
 	wg.Add(1)
 	go func(tt *testing.T) {
 		defer wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
 
 		incomingMessage, err := sub.Next(ctx)
@@ -388,7 +359,7 @@ func TestService_BroadcastAttestationWithDiscoveryAttempts(t *testing.T) {
 
 	// Broadcast to peers and wait.
 	require.NoError(t, p.BroadcastAttestation(context.Background(), subnet, msg))
-	if testutil.WaitTimeout(&wg, 1*time.Second) {
-		t.Error("Failed to receive pubsub within 5s")
+	if testutil.WaitTimeout(&wg, 4*time.Second) {
+		t.Error("Failed to receive pubsub within 4s")
 	}
 }

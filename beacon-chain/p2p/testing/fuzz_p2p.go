@@ -33,7 +33,7 @@ func (p *FakeP2P) Encoding() encoder.NetworkEncoding {
 }
 
 // AddConnectionHandler -- fake.
-func (p *FakeP2P) AddConnectionHandler(_ func(ctx context.Context, id peer.ID) error) {
+func (p *FakeP2P) AddConnectionHandler(_, _ func(ctx context.Context, id peer.ID) error) {
 
 }
 
@@ -56,8 +56,13 @@ func (p *FakeP2P) ENR() *enr.Record {
 	return new(enr.Record)
 }
 
+// DiscoveryAddresses -- fake
+func (p *FakeP2P) DiscoveryAddresses() ([]multiaddr.Multiaddr, error) {
+	return nil, nil
+}
+
 // FindPeersWithSubnet mocks the p2p func.
-func (p *FakeP2P) FindPeersWithSubnet(_ context.Context, _ uint64) (bool, error) {
+func (p *FakeP2P) FindPeersWithSubnet(_ context.Context, _ string, _, _ uint64) (bool, error) {
 	return false, nil
 }
 

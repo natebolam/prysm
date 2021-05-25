@@ -2,6 +2,7 @@ package initialsync
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -10,14 +11,15 @@ import (
 	"github.com/kevinms/leakybucket-go"
 	core "github.com/libp2p/go-libp2p-core"
 	"github.com/libp2p/go-libp2p-core/network"
+	types "github.com/prysmaticlabs/eth2-types"
 	eth "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 	mock "github.com/prysmaticlabs/prysm/beacon-chain/blockchain/testing"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
 	dbtest "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
-	"github.com/prysmaticlabs/prysm/beacon-chain/flags"
 	p2pm "github.com/prysmaticlabs/prysm/beacon-chain/p2p"
 	p2pt "github.com/prysmaticlabs/prysm/beacon-chain/p2p/testing"
 	beaconsync "github.com/prysmaticlabs/prysm/beacon-chain/sync"
+	"github.com/prysmaticlabs/prysm/cmd/beacon-chain/flags"
 	p2ppb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/sliceutil"
@@ -25,19 +27,19 @@ import (
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	"github.com/sirupsen/logrus"
+	logTest "github.com/sirupsen/logrus/hooks/test"
 )
 
 func TestBlocksFetcher_InitStartStop(t *testing.T) {
-	mc, p2p, _ := initializeTestServices(t, []uint64{}, []*peerData{})
+	mc, p2p, _ := initializeTestServices(t, []types.Slot{}, []*peerData{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	fetcher := newBlocksFetcher(
 		ctx,
 		&blocksFetcherConfig{
-			headFetcher:         mc,
-			finalizationFetcher: mc,
-			p2p:                 p2p,
+			chain: mc,
+			p2p:   p2p,
 		},
 	)
 
@@ -60,9 +62,8 @@ func TestBlocksFetcher_InitStartStop(t *testing.T) {
 		fetcher := newBlocksFetcher(
 			context.Background(),
 			&blocksFetcherConfig{
-				headFetcher:         mc,
-				finalizationFetcher: mc,
-				p2p:                 p2p,
+				chain: mc,
+				p2p:   p2p,
 			})
 		require.NoError(t, fetcher.start())
 		fetcher.stop()
@@ -74,79 +75,92 @@ func TestBlocksFetcher_InitStartStop(t *testing.T) {
 		fetcher := newBlocksFetcher(
 			ctx,
 			&blocksFetcherConfig{
-				headFetcher:         mc,
-				finalizationFetcher: mc,
-				p2p:                 p2p,
+				chain: mc,
+				p2p:   p2p,
 			})
 		require.NoError(t, fetcher.start())
 		cancel()
 		fetcher.stop()
 	})
+
+	t.Run("peer filter capacity weight", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		fetcher := newBlocksFetcher(
+			ctx,
+			&blocksFetcherConfig{
+				chain:                    mc,
+				p2p:                      p2p,
+				peerFilterCapacityWeight: 2,
+			})
+		require.NoError(t, fetcher.start())
+		assert.Equal(t, peerFilterCapacityWeight, fetcher.capacityWeight)
+	})
 }
 
 func TestBlocksFetcher_RoundRobin(t *testing.T) {
-	blockBatchLimit := uint64(flags.Get().BlockBatchLimit)
-	requestsGenerator := func(start, end uint64, batchSize uint64) []*fetchRequestParams {
+	slotsInBatch := types.Slot(flags.Get().BlockBatchLimit)
+	requestsGenerator := func(start, end, batchSize types.Slot) []*fetchRequestParams {
 		var requests []*fetchRequestParams
 		for i := start; i <= end; i += batchSize {
 			requests = append(requests, &fetchRequestParams{
 				start: i,
-				count: batchSize,
+				count: uint64(batchSize),
 			})
 		}
 		return requests
 	}
 	tests := []struct {
 		name               string
-		expectedBlockSlots []uint64
+		expectedBlockSlots []types.Slot
 		peers              []*peerData
 		requests           []*fetchRequestParams
 	}{
 		{
 			name:               "Single peer with all blocks",
-			expectedBlockSlots: makeSequence(1, 3*blockBatchLimit),
+			expectedBlockSlots: makeSequence(1, 3*slotsInBatch),
 			peers: []*peerData{
 				{
-					blocks:         makeSequence(1, 3*blockBatchLimit),
-					finalizedEpoch: helpers.SlotToEpoch(3 * blockBatchLimit),
-					headSlot:       3 * blockBatchLimit,
+					blocks:         makeSequence(1, 3*slotsInBatch),
+					finalizedEpoch: helpers.SlotToEpoch(3 * slotsInBatch),
+					headSlot:       3 * slotsInBatch,
 				},
 			},
-			requests: requestsGenerator(1, 3*blockBatchLimit, blockBatchLimit),
+			requests: requestsGenerator(1, 3*slotsInBatch, slotsInBatch),
 		},
 		{
 			name:               "Single peer with all blocks (many small requests)",
-			expectedBlockSlots: makeSequence(1, 3*blockBatchLimit),
+			expectedBlockSlots: makeSequence(1, 3*slotsInBatch),
 			peers: []*peerData{
 				{
-					blocks:         makeSequence(1, 3*blockBatchLimit),
-					finalizedEpoch: helpers.SlotToEpoch(3 * blockBatchLimit),
-					headSlot:       3 * blockBatchLimit,
+					blocks:         makeSequence(1, 3*slotsInBatch),
+					finalizedEpoch: helpers.SlotToEpoch(3 * slotsInBatch),
+					headSlot:       3 * slotsInBatch,
 				},
 			},
-			requests: requestsGenerator(1, 3*blockBatchLimit, blockBatchLimit/4),
+			requests: requestsGenerator(1, 3*slotsInBatch, slotsInBatch/4),
 		},
 		{
 			name:               "Multiple peers with all blocks",
-			expectedBlockSlots: makeSequence(1, 3*blockBatchLimit),
+			expectedBlockSlots: makeSequence(1, 3*slotsInBatch),
 			peers: []*peerData{
 				{
-					blocks:         makeSequence(1, 3*blockBatchLimit),
-					finalizedEpoch: helpers.SlotToEpoch(3 * blockBatchLimit),
-					headSlot:       3 * blockBatchLimit,
+					blocks:         makeSequence(1, 3*slotsInBatch),
+					finalizedEpoch: helpers.SlotToEpoch(3 * slotsInBatch),
+					headSlot:       3 * slotsInBatch,
 				},
 				{
-					blocks:         makeSequence(1, 3*blockBatchLimit),
-					finalizedEpoch: helpers.SlotToEpoch(3 * blockBatchLimit),
-					headSlot:       3 * blockBatchLimit,
+					blocks:         makeSequence(1, 3*slotsInBatch),
+					finalizedEpoch: helpers.SlotToEpoch(3 * slotsInBatch),
+					headSlot:       3 * slotsInBatch,
 				},
 				{
-					blocks:         makeSequence(1, 3*blockBatchLimit),
-					finalizedEpoch: helpers.SlotToEpoch(3 * blockBatchLimit),
-					headSlot:       3 * blockBatchLimit,
+					blocks:         makeSequence(1, 3*slotsInBatch),
+					finalizedEpoch: helpers.SlotToEpoch(3 * slotsInBatch),
+					headSlot:       3 * slotsInBatch,
 				},
 			},
-			requests: requestsGenerator(1, 3*blockBatchLimit, blockBatchLimit),
+			requests: requestsGenerator(1, 3*slotsInBatch, slotsInBatch),
 		},
 		{
 			name:               "Multiple peers with skipped slots",
@@ -181,15 +195,15 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 			requests: []*fetchRequestParams{
 				{
 					start: 1,
-					count: blockBatchLimit,
+					count: uint64(slotsInBatch),
 				},
 				{
-					start: blockBatchLimit + 1,
-					count: blockBatchLimit,
+					start: slotsInBatch + 1,
+					count: uint64(slotsInBatch),
 				},
 				{
-					start: 2*blockBatchLimit + 1,
-					count: blockBatchLimit,
+					start: 2*slotsInBatch + 1,
+					count: uint64(slotsInBatch),
 				},
 				{
 					start: 500,
@@ -203,7 +217,7 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 		},
 		{
 			name:               "Multiple peers with failures",
-			expectedBlockSlots: makeSequence(1, 2*blockBatchLimit),
+			expectedBlockSlots: makeSequence(1, 2*slotsInBatch),
 			peers: []*peerData{
 				{
 					blocks:         makeSequence(1, 320),
@@ -230,11 +244,11 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 			requests: []*fetchRequestParams{
 				{
 					start: 1,
-					count: blockBatchLimit,
+					count: uint64(slotsInBatch),
 				},
 				{
-					start: blockBatchLimit + 1,
-					count: blockBatchLimit,
+					start: slotsInBatch + 1,
+					count: uint64(slotsInBatch),
 				},
 			},
 		},
@@ -244,7 +258,7 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cache.initializeRootCache(tt.expectedBlockSlots, t)
 
-			beaconDB, _ := dbtest.SetupDB(t)
+			beaconDB := dbtest.SetupDB(t)
 
 			p := p2pt.NewTestP2P(t)
 			connectPeers(t, p, tt.peers, p.Peers())
@@ -255,7 +269,8 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 			err := beaconDB.SaveBlock(context.Background(), testutil.NewBeaconBlock())
 			require.NoError(t, err)
 
-			st := testutil.NewBeaconState()
+			st, err := testutil.NewBeaconState()
+			require.NoError(t, err)
 
 			mc := &mock.ChainService{
 				State: st,
@@ -268,9 +283,8 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 
 			ctx, cancel := context.WithCancel(context.Background())
 			fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
-				headFetcher:         mc,
-				finalizationFetcher: mc,
-				p2p:                 p,
+				chain: mc,
+				p2p:   p,
 			})
 			require.NoError(t, fetcher.start())
 
@@ -327,7 +341,7 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 				return blocks[i].Block.Slot < blocks[j].Block.Slot
 			})
 
-			slots := make([]uint64, len(blocks))
+			slots := make([]types.Slot, len(blocks))
 			for i, block := range blocks {
 				slots[i] = block.Block.Slot
 			}
@@ -341,12 +355,11 @@ func TestBlocksFetcher_RoundRobin(t *testing.T) {
 				t.Errorf("Too many blocks returned. Wanted %d got %d", maxExpectedBlocks, len(blocks))
 			}
 			assert.Equal(t, len(tt.expectedBlockSlots), len(blocks), "Processes wrong number of blocks")
-			var receivedBlockSlots []uint64
+			var receivedBlockSlots []types.Slot
 			for _, blk := range blocks {
 				receivedBlockSlots = append(receivedBlockSlots, blk.Block.Slot)
 			}
-			missing := sliceutil.NotUint64(
-				sliceutil.IntersectionUint64(tt.expectedBlockSlots, receivedBlockSlots), tt.expectedBlockSlots)
+			missing := sliceutil.NotSlot(sliceutil.IntersectionSlot(tt.expectedBlockSlots, receivedBlockSlots), tt.expectedBlockSlots)
 			if len(missing) > 0 {
 				t.Errorf("Missing blocks at slots %v", missing)
 			}
@@ -358,21 +371,32 @@ func TestBlocksFetcher_scheduleRequest(t *testing.T) {
 	blockBatchLimit := uint64(flags.Get().BlockBatchLimit)
 	t.Run("context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
-		fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
-			headFetcher: nil,
-			p2p:         nil,
-		})
+		fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{})
 		cancel()
 		assert.ErrorContains(t, "context canceled", fetcher.scheduleRequest(ctx, 1, blockBatchLimit))
 	})
+
+	t.Run("unblock on context cancellation", func(t *testing.T) {
+		fetcher := newBlocksFetcher(context.Background(), &blocksFetcherConfig{})
+		for i := 0; i < maxPendingRequests; i++ {
+			assert.NoError(t, fetcher.scheduleRequest(context.Background(), 1, blockBatchLimit))
+		}
+
+		// Will block on next request (and wait until requests are either processed or context is closed).
+		go func() {
+			fetcher.cancel()
+		}()
+		assert.ErrorContains(t, errFetcherCtxIsDone.Error(),
+			fetcher.scheduleRequest(context.Background(), 1, blockBatchLimit))
+	})
 }
 func TestBlocksFetcher_handleRequest(t *testing.T) {
-	blockBatchLimit := uint64(flags.Get().BlockBatchLimit)
+	blockBatchLimit := flags.Get().BlockBatchLimit
 	chainConfig := struct {
-		expectedBlockSlots []uint64
+		expectedBlockSlots []types.Slot
 		peers              []*peerData
 	}{
-		expectedBlockSlots: makeSequence(1, blockBatchLimit),
+		expectedBlockSlots: makeSequence(1, types.Slot(blockBatchLimit)),
 		peers: []*peerData{
 			{
 				blocks:         makeSequence(1, 320),
@@ -392,13 +416,12 @@ func TestBlocksFetcher_handleRequest(t *testing.T) {
 	t.Run("context cancellation", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
-			headFetcher:         mc,
-			finalizationFetcher: mc,
-			p2p:                 p2p,
+			chain: mc,
+			p2p:   p2p,
 		})
 
 		cancel()
-		response := fetcher.handleRequest(ctx, 1, blockBatchLimit)
+		response := fetcher.handleRequest(ctx, 1, uint64(blockBatchLimit))
 		assert.ErrorContains(t, "context canceled", response.err)
 	})
 
@@ -406,15 +429,14 @@ func TestBlocksFetcher_handleRequest(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{
-			headFetcher:         mc,
-			finalizationFetcher: mc,
-			p2p:                 p2p,
+			chain: mc,
+			p2p:   p2p,
 		})
 
 		requestCtx, reqCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer reqCancel()
 		go func() {
-			response := fetcher.handleRequest(requestCtx, 1 /* start */, blockBatchLimit /* count */)
+			response := fetcher.handleRequest(requestCtx, 1 /* start */, uint64(blockBatchLimit) /* count */)
 			select {
 			case <-ctx.Done():
 			case fetcher.fetchResponses <- response:
@@ -432,17 +454,15 @@ func TestBlocksFetcher_handleRequest(t *testing.T) {
 				blocks = resp.blocks
 			}
 		}
-		if uint64(len(blocks)) != blockBatchLimit {
+		if uint64(len(blocks)) != uint64(blockBatchLimit) {
 			t.Errorf("incorrect number of blocks returned, expected: %v, got: %v", blockBatchLimit, len(blocks))
 		}
 
-		var receivedBlockSlots []uint64
+		var receivedBlockSlots []types.Slot
 		for _, blk := range blocks {
 			receivedBlockSlots = append(receivedBlockSlots, blk.Block.Slot)
 		}
-		missing := sliceutil.NotUint64(
-			sliceutil.IntersectionUint64(chainConfig.expectedBlockSlots, receivedBlockSlots),
-			chainConfig.expectedBlockSlots)
+		missing := sliceutil.NotSlot(sliceutil.IntersectionSlot(chainConfig.expectedBlockSlots, receivedBlockSlots), chainConfig.expectedBlockSlots)
 		if len(missing) > 0 {
 			t.Errorf("Missing blocks at slots %v", missing)
 		}
@@ -450,9 +470,9 @@ func TestBlocksFetcher_handleRequest(t *testing.T) {
 }
 
 func TestBlocksFetcher_requestBeaconBlocksByRange(t *testing.T) {
-	blockBatchLimit := uint64(flags.Get().BlockBatchLimit)
+	blockBatchLimit := flags.Get().BlockBatchLimit
 	chainConfig := struct {
-		expectedBlockSlots []uint64
+		expectedBlockSlots []types.Slot
 		peers              []*peerData
 	}{
 		expectedBlockSlots: makeSequence(1, 320),
@@ -477,20 +497,19 @@ func TestBlocksFetcher_requestBeaconBlocksByRange(t *testing.T) {
 	fetcher := newBlocksFetcher(
 		ctx,
 		&blocksFetcherConfig{
-			finalizationFetcher: mc,
-			headFetcher:         mc,
-			p2p:                 p2p,
+			chain: mc,
+			p2p:   p2p,
 		})
 
 	_, peerIDs := p2p.Peers().BestFinalized(params.BeaconConfig().MaxPeersToSync, helpers.SlotToEpoch(mc.HeadSlot()))
 	req := &p2ppb.BeaconBlocksByRangeRequest{
 		StartSlot: 1,
 		Step:      1,
-		Count:     blockBatchLimit,
+		Count:     uint64(blockBatchLimit),
 	}
 	blocks, err := fetcher.requestBlocks(ctx, req, peerIDs[0])
 	assert.NoError(t, err)
-	assert.Equal(t, blockBatchLimit, uint64(len(blocks)), "Incorrect number of blocks returned")
+	assert.Equal(t, uint64(blockBatchLimit), uint64(len(blocks)), "Incorrect number of blocks returned")
 
 	// Test context cancellation.
 	ctx, cancel = context.WithCancel(context.Background())
@@ -527,6 +546,7 @@ func TestBlocksFetcher_RequestBlocksRateLimitingLocks(t *testing.T) {
 	fetcher := newBlocksFetcher(ctx, &blocksFetcherConfig{p2p: p1})
 	fetcher.rateLimiter = leakybucket.NewCollector(float64(req.Count), int64(req.Count*burstFactor), false)
 
+	hook := logTest.NewGlobal()
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
 	go func() {
@@ -563,6 +583,8 @@ func TestBlocksFetcher_RequestBlocksRateLimitingLocks(t *testing.T) {
 	case <-ch:
 		// p3 responded w/o waiting for rate limiter's lock (on which p2 spins).
 	}
+	// Make sure that p2 has been rate limited.
+	require.LogsContain(t, hook, fmt.Sprintf("msg=\"Slowing down for rate limit\" peer=%s", p2.PeerID()))
 }
 
 func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T) {
@@ -583,7 +605,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 			},
 			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
 				return func(stream network.Stream) {
-					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step; i += req.Step {
+					for i := req.StartSlot; i < req.StartSlot.Add(req.Count*req.Step); i += types.Slot(req.Step) {
 						blk := testutil.NewBeaconBlock()
 						blk.Block.Slot = i
 						assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
@@ -604,7 +626,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 			},
 			handlerGenFn: func(req *p2ppb.BeaconBlocksByRangeRequest) func(stream network.Stream) {
 				return func(stream network.Stream) {
-					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step+1; i += req.Step {
+					for i := req.StartSlot; i < req.StartSlot.Add(req.Count*req.Step+1); i += types.Slot(req.Step) {
 						blk := testutil.NewBeaconBlock()
 						blk.Block.Slot = i
 						assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
@@ -615,7 +637,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
 				assert.Equal(t, 0, len(blocks))
 			},
-			wantedErr: errInvalidFetchedData.Error(),
+			wantedErr: beaconsync.ErrInvalidFetchedData.Error(),
 		},
 		{
 			name: "not in a consecutive order",
@@ -639,7 +661,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
 				assert.Equal(t, 0, len(blocks))
 			},
-			wantedErr: errInvalidFetchedData.Error(),
+			wantedErr: beaconsync.ErrInvalidFetchedData.Error(),
 		},
 		{
 			name: "same slot number",
@@ -663,7 +685,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
 				assert.Equal(t, 0, len(blocks))
 			},
-			wantedErr: errInvalidFetchedData.Error(),
+			wantedErr: beaconsync.ErrInvalidFetchedData.Error(),
 		},
 		{
 			name: "slot is too low",
@@ -677,10 +699,10 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 					defer func() {
 						assert.NoError(t, stream.Close())
 					}()
-					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step; i += req.Step {
+					for i := req.StartSlot; i < req.StartSlot.Add(req.Count*req.Step); i += types.Slot(req.Step) {
 						blk := testutil.NewBeaconBlock()
 						// Patch mid block, with invalid slot number.
-						if i == (req.StartSlot + req.Count*req.Step/2) {
+						if i == req.StartSlot.Add(req.Count*req.Step/2) {
 							blk.Block.Slot = req.StartSlot - 1
 							assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
 							break
@@ -691,7 +713,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 					}
 				}
 			},
-			wantedErr: errInvalidFetchedData.Error(),
+			wantedErr: beaconsync.ErrInvalidFetchedData.Error(),
 			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
 				assert.Equal(t, 0, len(blocks))
 			},
@@ -708,11 +730,11 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 					defer func() {
 						assert.NoError(t, stream.Close())
 					}()
-					for i := req.StartSlot; i < req.StartSlot+req.Count*req.Step; i += req.Step {
+					for i := req.StartSlot; i < req.StartSlot.Add(req.Count*req.Step); i += types.Slot(req.Step) {
 						blk := testutil.NewBeaconBlock()
 						// Patch mid block, with invalid slot number.
-						if i == (req.StartSlot + req.Count*req.Step/2) {
-							blk.Block.Slot = req.StartSlot + req.Count*req.Step
+						if i == req.StartSlot.Add(req.Count*req.Step/2) {
+							blk.Block.Slot = req.StartSlot.Add(req.Count * req.Step)
 							assert.NoError(t, beaconsync.WriteChunk(stream, p1.Encoding(), blk))
 							break
 						} else {
@@ -722,7 +744,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 					}
 				}
 			},
-			wantedErr: errInvalidFetchedData.Error(),
+			wantedErr: beaconsync.ErrInvalidFetchedData.Error(),
 			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
 				assert.Equal(t, 0, len(blocks))
 			},
@@ -772,7 +794,7 @@ func TestBlocksFetcher_requestBlocksFromPeerReturningInvalidBlocks(t *testing.T)
 			validate: func(req *p2ppb.BeaconBlocksByRangeRequest, blocks []*eth.SignedBeaconBlock) {
 				assert.Equal(t, 0, len(blocks))
 			},
-			wantedErr: errInvalidFetchedData.Error(),
+			wantedErr: beaconsync.ErrInvalidFetchedData.Error(),
 		},
 	}
 

@@ -4,10 +4,12 @@ package sync
 
 import (
 	"context"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/libp2p/go-libp2p-core/peer"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	gcache "github.com/patrickmn/go-cache"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
 )
 
@@ -16,23 +18,12 @@ func NewRegularSyncFuzz(cfg *Config) *Service {
 	rLimiter := newRateLimiter(cfg.P2P)
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Service{
+		cfg:                  cfg,
 		ctx:                  ctx,
 		cancel:               cancel,
-		db:                   cfg.DB,
-		p2p:                  cfg.P2P,
-		attPool:              cfg.AttPool,
-		exitPool:             cfg.ExitPool,
-		slashingPool:         cfg.SlashingPool,
-		chain:                cfg.Chain,
-		initialSync:          cfg.InitialSync,
-		attestationNotifier:  cfg.AttestationNotifier,
-		slotToPendingBlocks:  make(map[uint64][]*ethpb.SignedBeaconBlock),
+		slotToPendingBlocks:  gcache.New(time.Second, 2*time.Second),
 		seenPendingBlocks:    make(map[[32]byte]bool),
 		blkRootToPendingAtts: make(map[[32]byte][]*ethpb.SignedAggregateAttestationAndProof),
-		stateNotifier:        cfg.StateNotifier,
-		blockNotifier:        cfg.BlockNotifier,
-		stateSummaryCache:    cfg.StateSummaryCache,
-		stateGen:             cfg.StateGen,
 		rateLimiter:          rLimiter,
 	}
 

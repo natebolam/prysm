@@ -28,7 +28,7 @@ func TestEndToEnd_MinimalConfig(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	minimalConfig := &types.E2EConfig{
+	testConfig := &types.E2EConfig{
 		BeaconFlags: []string{
 			fmt.Sprintf("--slots-per-archive-point=%d", params.BeaconConfig().SlotsPerEpoch*16),
 		},
@@ -46,6 +46,7 @@ func TestEndToEnd_MinimalConfig(t *testing.T) {
 			ev.ValidatorsParticipating,
 			ev.FinalizationOccurs,
 			ev.ProcessesDepositsInBlocks,
+			ev.VerifyBlockGraffiti,
 			ev.ActivatesDepositedValidators,
 			ev.DepositedValidatorsAreActive,
 			ev.ProposeVoluntaryExit,
@@ -55,5 +56,5 @@ func TestEndToEnd_MinimalConfig(t *testing.T) {
 		},
 	}
 
-	runEndToEndTest(t, minimalConfig)
+	newTestRunner(t, testConfig).run()
 }

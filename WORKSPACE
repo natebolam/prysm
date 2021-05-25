@@ -5,19 +5,19 @@ load("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
 
 http_archive(
     name = "bazel_toolchains",
-    sha256 = "db48eed61552e25d36fe051a65d2a329cc0fb08442627e8f13960c5ab087a44e",
-    strip_prefix = "bazel-toolchains-3.2.0",
+    sha256 = "8e0633dfb59f704594f19ae996a35650747adc621ada5e8b9fb588f808c89cb0",
+    strip_prefix = "bazel-toolchains-3.7.0",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/releases/download/3.2.0/bazel-toolchains-3.2.0.tar.gz",
-        "https://github.com/bazelbuild/bazel-toolchains/releases/download/3.2.0/bazel-toolchains-3.2.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-toolchains/releases/download/3.7.0/bazel-toolchains-3.7.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-toolchains/releases/download/3.7.0/bazel-toolchains-3.7.0.tar.gz",
     ],
 )
 
 http_archive(
     name = "com_grail_bazel_toolchain",
-    sha256 = "0bec89e35d8a141c87f28cfc506d6d344785c8eb2ff3a453140a1fe972ada79d",
-    strip_prefix = "bazel-toolchain-77a87103145f86f03f90475d19c2c8854398a444",
-    urls = ["https://github.com/grailbio/bazel-toolchain/archive/77a87103145f86f03f90475d19c2c8854398a444.tar.gz"],
+    sha256 = "040b9d00b8a03e8a28e38159ad0f2d0e0de625d93f453a9f226971a8c47e757b",
+    strip_prefix = "bazel-toolchain-5f82830f9d6a1941c3eb29683c1864ccf2862454",
+    urls = ["https://github.com/grailbio/bazel-toolchain/archive/5f82830f9d6a1941c3eb29683c1864ccf2862454.tar.gz"],
 )
 
 load("@com_grail_bazel_toolchain//toolchain:deps.bzl", "bazel_toolchain_dependencies")
@@ -28,7 +28,7 @@ load("@com_grail_bazel_toolchain//toolchain:rules.bzl", "llvm_toolchain")
 
 llvm_toolchain(
     name = "llvm_toolchain",
-    llvm_version = "9.0.0",
+    llvm_version = "10.0.0",
 )
 
 load("@llvm_toolchain//:toolchains.bzl", "llvm_register_toolchains")
@@ -47,10 +47,10 @@ load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
 
 http_archive(
     name = "bazel_skylib",
-    sha256 = "97e70364e9249702246c0e9444bccdc4b847bed1eb03c5a3ece4f83dfe6abc44",
+    sha256 = "1c531376ac7e5a180e0237938a2536de0c54d93f5c278634818e0efc952dd56c",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.0.2/bazel-skylib-1.0.2.tar.gz",
-        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.0.2/bazel-skylib-1.0.2.tar.gz",
+        "https://github.com/bazelbuild/bazel-skylib/releases/download/1.0.3/bazel-skylib-1.0.3.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-skylib/releases/download/1.0.3/bazel-skylib-1.0.3.tar.gz",
     ],
 )
 
@@ -60,10 +60,10 @@ bazel_skylib_workspace()
 
 http_archive(
     name = "bazel_gazelle",
-    sha256 = "d8c45ee70ec39a57e7a05e5027c32b1576cc7f16d9dd37135b0eddde45cf1b10",
+    sha256 = "62ca106be173579c0a167deb23358fdfe71ffa1e4cfdddf5582af26520f1c66f",
     urls = [
-        "https://storage.googleapis.com/bazel-mirror/github.com/bazelbuild/bazel-gazelle/releases/download/v0.20.0/bazel-gazelle-v0.20.0.tar.gz",
-        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.20.0/bazel-gazelle-v0.20.0.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/bazel-gazelle/releases/download/v0.23.0/bazel-gazelle-v0.23.0.tar.gz",
+        "https://github.com/bazelbuild/bazel-gazelle/releases/download/v0.23.0/bazel-gazelle-v0.23.0.tar.gz",
     ],
 )
 
@@ -76,9 +76,9 @@ http_archive(
 
 http_archive(
     name = "io_bazel_rules_docker",
-    sha256 = "dc97fccceacd4c6be14e800b2a00693d5e8d07f69ee187babfd04a80a9f8e250",
-    strip_prefix = "rules_docker-0.14.1",
-    url = "https://github.com/bazelbuild/rules_docker/archive/v0.14.1.tar.gz",
+    sha256 = "59d5b42ac315e7eadffa944e86e90c2990110a1c8075f1cd145f487e999d22b3",
+    strip_prefix = "rules_docker-0.17.0",
+    urls = ["https://github.com/bazelbuild/rules_docker/releases/download/v0.17.0/rules_docker-v0.17.0.tar.gz"],
 )
 
 http_archive(
@@ -89,10 +89,10 @@ http_archive(
         # nogo check fails for certain third_party dependencies.
         "//third_party:io_bazel_rules_go.patch",
     ],
-    sha256 = "7b9bbe3ea1fccb46dcfa6c3f3e29ba7ec740d8733370e21cdc8937467b4a4349",
+    sha256 = "7c10271940c6bce577d51a075ae77728964db285dac0a46614a7934dc34303e6",
     urls = [
-        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.22.4/rules_go-v0.22.4.tar.gz",
-        "https://github.com/bazelbuild/rules_go/releases/download/v0.22.4/rules_go-v0.22.4.tar.gz",
+        "https://mirror.bazel.build/github.com/bazelbuild/rules_go/releases/download/v0.26.0/rules_go-v0.26.0.tar.gz",
+        "https://github.com/bazelbuild/rules_go/releases/download/v0.26.0/rules_go-v0.26.0.tar.gz",
     ],
 )
 
@@ -100,14 +100,14 @@ http_archive(
 # https://github.com/gogo/protobuf/pull/582 is merged.
 git_repository(
     name = "com_github_gogo_protobuf",
-    commit = "5628607bb4c51c3157aacc3a50f0ab707582b805",
+    commit = "b03c65ea87cdc3521ede29f62fe3ce239267c1bc",
     patch_args = ["-p1"],
     patches = [
         "@io_bazel_rules_go//third_party:com_github_gogo_protobuf-gazelle.patch",
         "//third_party:com_github_gogo_protobuf-equal.patch",
     ],
     remote = "https://github.com/gogo/protobuf",
-    shallow_since = "1571033717 +0200",
+    shallow_since = "1610265707 +0000",
     # gazelle args: -go_prefix github.com/gogo/protobuf -proto legacy
 )
 
@@ -139,9 +139,9 @@ load(
 
 container_pull(
     name = "alpine_cc_linux_amd64",
-    digest = "sha256:3f7f4dfcb6dceac3a902f36609cc232262e49f5656a6dc4bb3da89e35fecc8a5",
+    digest = "sha256:752aa0c9a88461ffc50c5267bb7497ef03a303e38b2c8f7f2ded9bebe5f1f00e",
     registry = "index.docker.io",
-    repository = "fasibio/alpine-libgcc",
+    repository = "pinglamb/alpine-glibc",
 )
 
 container_pull(
@@ -155,7 +155,10 @@ load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_depe
 
 go_rules_dependencies()
 
-go_register_toolchains(nogo = "@//:nogo")
+go_register_toolchains(
+    go_version = "1.16.4",
+    nogo = "@//:nogo",
+)
 
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
 
@@ -208,19 +211,34 @@ http_archive(
 )
 
 http_archive(
+    name = "eip3076_spec_tests",
+    build_file_content = """
+filegroup(
+    name = "test_data",
+    srcs = glob([
+        "**/*.json",
+    ]),
+    visibility = ["//visibility:public"],
+)
+    """,
+    sha256 = "91434d5fd5e1c6eb7b0174fed2afe25e09bddf00e1e4c431db931b2cee4e7773",
+    url = "https://github.com/eth2-clients/slashing-protection-interchange-tests/archive/b8413ca42dc92308019d0d4db52c87e9e125c4e9.tar.gz",
+)
+
+http_archive(
     name = "eth2_spec_tests_general",
     build_file_content = """
 filegroup(
     name = "test_data",
     srcs = glob([
-        "**/*.ssz",
+        "**/*.ssz_snappy",
         "**/*.yaml",
     ]),
     visibility = ["//visibility:public"],
 )
     """,
-    sha256 = "7e5f838e0f9110471ef8be9401ea687a8ed4d499664dc0eac34ecfdfd03c2ac3",
-    url = "https://github.com/ethereum/eth2.0-spec-tests/releases/download/v0.12.3/general.tar.gz",
+    sha256 = "deacc076365c727d653ac064894ecf0d1b0a675d86704dc8de271259f6a7314b",
+    url = "https://github.com/ethereum/eth2.0-spec-tests/releases/download/v1.1.0-alpha.3/general.tar.gz",
 )
 
 http_archive(
@@ -229,14 +247,14 @@ http_archive(
 filegroup(
     name = "test_data",
     srcs = glob([
-        "**/*.ssz",
+        "**/*.ssz_snappy",
         "**/*.yaml",
     ]),
     visibility = ["//visibility:public"],
 )
     """,
-    sha256 = "72c2f561db879ddcdf729fef93d10e0f9162b4cf3a697c513ef8935b93f6165a",
-    url = "https://github.com/ethereum/eth2.0-spec-tests/releases/download/v0.12.3/minimal.tar.gz",
+    sha256 = "6e9886af3d2f024e563249d70388129e28e3e92f742f289238ed9b7ec7a7f930",
+    url = "https://github.com/ethereum/eth2.0-spec-tests/releases/download/v1.1.0-alpha.3/minimal.tar.gz",
 )
 
 http_archive(
@@ -245,14 +263,14 @@ http_archive(
 filegroup(
     name = "test_data",
     srcs = glob([
-        "**/*.ssz",
+        "**/*.ssz_snappy",
         "**/*.yaml",
     ]),
     visibility = ["//visibility:public"],
 )
     """,
-    sha256 = "63eca02503692a0b6a2d7b70118e0dd62dff094153a3a542af6dbea721841b0d",
-    url = "https://github.com/ethereum/eth2.0-spec-tests/releases/download/v0.12.3/mainnet.tar.gz",
+    sha256 = "a7b3d0ffc02a567250f424d69b2474fdc9477cd56eada60af7474560b46a8527",
+    url = "https://github.com/ethereum/eth2.0-spec-tests/releases/download/v1.1.0-alpha.3/mainnet.tar.gz",
 )
 
 http_archive(
@@ -268,9 +286,9 @@ buildifier_dependencies()
 
 git_repository(
     name = "com_google_protobuf",
-    commit = "4059c61f27eb1b06c4ee979546a238be792df0a4",
+    commit = "fde7cf7358ec7cd69e8db9be4f1fa6a5c431386a",  # v3.13.0
     remote = "https://github.com/protocolbuffers/protobuf",
-    shallow_since = "1558721209 -0700",
+    shallow_since = "1597443653 -0700",
 )
 
 load("@com_google_protobuf//:protobuf_deps.bzl", "protobuf_deps")
@@ -349,9 +367,9 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 """,
-    sha256 = "6bb16ff0dc9348090cc31a9ea453643d32b617e66ac6e7bb38985d530070631b",
+    sha256 = "edb80f3a695d84f6000f0e05abf7a4bbf207c03abb91219780ec97e7d6ad21c8",
     urls = [
-        "https://github.com/prysmaticlabs/prysm-web-ui/releases/download/0.0.2-alpha/prysm-web-ui.tar.gz",
+        "https://github.com/prysmaticlabs/prysm-web-ui/releases/download/v1.0.0-beta.3/prysm-web-ui.tar.gz",
     ],
 )
 
@@ -359,10 +377,6 @@ load("//:deps.bzl", "prysm_deps")
 
 # gazelle:repository_macro deps.bzl%prysm_deps
 prysm_deps()
-
-load("@com_github_prysmaticlabs_go_ssz//:deps.bzl", "go_ssz_dependencies")
-
-go_ssz_dependencies()
 
 load("@prysm//third_party/herumi:herumi.bzl", "bls_dependencies")
 

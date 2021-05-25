@@ -3,14 +3,17 @@ package accounts
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 
 	"github.com/logrusorgru/aurora"
 	"github.com/pkg/errors"
+	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/cmd/validator/flags"
 	"github.com/prysmaticlabs/prysm/shared/petnames"
+	"github.com/prysmaticlabs/prysm/validator/accounts/iface"
 	"github.com/prysmaticlabs/prysm/validator/accounts/wallet"
-	"github.com/prysmaticlabs/prysm/validator/flags"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/derived"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/imported"
@@ -26,15 +29,25 @@ func ListAccountsCli(cliCtx *cli.Context) error {
 	if err != nil {
 		return errors.Wrap(err, "could not open wallet")
 	}
-	km, err := w.InitializeKeymanager(cliCtx.Context, true /* skip mnemonic confirm */)
+	km, err := w.InitializeKeymanager(cliCtx.Context, iface.InitKeymanagerConfig{ListenForChanges: false})
 	if err != nil && strings.Contains(err.Error(), "invalid checksum") {
 		return errors.New("wrong wallet password entered")
 	}
 	if err != nil {
-		return errors.Wrap(err, "could not initialize keymanager")
+		return errors.Wrap(err, ErrCouldNotInitializeKeymanager)
 	}
 	showDepositData := cliCtx.Bool(flags.ShowDepositDataFlag.Name)
 	showPrivateKeys := cliCtx.Bool(flags.ShowPrivateKeysFlag.Name)
+	listIndices := cliCtx.Bool(flags.ListValidatorIndices.Name)
+
+	if listIndices {
+		client, _, err := prepareClients(cliCtx)
+		if err != nil {
+			return err
+		}
+		return listValidatorIndices(cliCtx.Context, km, *client)
+	}
+
 	switch w.KeymanagerKind() {
 	case keymanager.Imported:
 		km, ok := km.(*imported.Keymanager)
@@ -49,7 +62,7 @@ func ListAccountsCli(cliCtx *cli.Context) error {
 		if !ok {
 			return errors.New("could not assert keymanager interface to concrete type")
 		}
-		if err := listDerivedKeymanagerAccounts(cliCtx.Context, showDepositData, showPrivateKeys, km); err != nil {
+		if err := listDerivedKeymanagerAccounts(cliCtx.Context, showPrivateKeys, km); err != nil {
 			return errors.Wrap(err, "could not list validator accounts with derived keymanager")
 		}
 	case keymanager.Remote:
@@ -61,7 +74,7 @@ func ListAccountsCli(cliCtx *cli.Context) error {
 			return errors.Wrap(err, "could not list validator accounts with remote keymanager")
 		}
 	default:
-		return fmt.Errorf("keymanager kind %s not yet supported", w.KeymanagerKind().String())
+		return fmt.Errorf(errKeymanagerNotSupported, w.KeymanagerKind().String())
 	}
 	return nil
 }
@@ -87,7 +100,7 @@ func listImportedKeymanagerAccounts(
 	}
 	fmt.Println(
 		au.BrightRed("View the eth1 deposit transaction data for your accounts " +
-			"by running `validator accounts list --show-deposit-data"),
+			"by running `validator accounts list --show-deposit-data`"),
 	)
 
 	pubKeys, err := keymanager.FetchValidatingPublicKeys(ctx)
@@ -106,7 +119,9 @@ func listImportedKeymanagerAccounts(
 		fmt.Printf("%s | %s\n", au.BrightBlue(fmt.Sprintf("Account %d", i)).Bold(), au.BrightGreen(accountNames[i]).Bold())
 		fmt.Printf("%s %#x\n", au.BrightMagenta("[validating public key]").Bold(), pubKeys[i])
 		if showPrivateKeys {
-			fmt.Printf("%s %#x\n", au.BrightRed("[validating private key]").Bold(), privateKeys[i])
+			if len(privateKeys) > i {
+				fmt.Printf("%s %#x\n", au.BrightRed("[validating private key]").Bold(), privateKeys[i])
+			}
 		}
 		if !showDepositData {
 			continue
@@ -124,13 +139,12 @@ func listImportedKeymanagerAccounts(
 
 func listDerivedKeymanagerAccounts(
 	ctx context.Context,
-	showDepositData,
 	showPrivateKeys bool,
 	keymanager *derived.Keymanager,
 ) error {
 	au := aurora.NewAurora(true)
 	fmt.Printf("(keymanager kind) %s\n", au.BrightGreen("derived, (HD) hierarchical-deterministic").Bold())
-	fmt.Printf("(derivation format) %s\n", au.BrightGreen(keymanager.KeymanagerOpts().DerivedPathStructure).Bold())
+	fmt.Printf("(derivation format) %s\n", au.BrightGreen(derived.DerivationPathFormat).Bold())
 	validatingPubKeys, err := keymanager.FetchValidatingPublicKeys(ctx)
 	if err != nil {
 		return errors.Wrap(err, "could not fetch validating public keys")
@@ -141,22 +155,6 @@ func listDerivedKeymanagerAccounts(
 		if err != nil {
 			return errors.Wrap(err, "could not fetch validating private keys")
 		}
-	}
-	withdrawalPublicKeys, err := keymanager.FetchWithdrawalPublicKeys(ctx)
-	if err != nil {
-		return errors.Wrap(err, "could not fetch validating public keys")
-	}
-	var withdrawalPrivateKeys [][32]byte
-	if showPrivateKeys {
-		withdrawalPrivateKeys, err = keymanager.FetchWithdrawalPrivateKeys(ctx)
-		if err != nil {
-			return errors.Wrap(err, "could not fetch withdrawal private keys")
-		}
-	}
-	nextAccountNumber := keymanager.NextAccountNumber()
-	currentAccountNumber := nextAccountNumber
-	if nextAccountNumber > 0 {
-		currentAccountNumber--
 	}
 	accountNames, err := keymanager.ValidatingAccountNames(ctx)
 	if err != nil {
@@ -170,39 +168,18 @@ func listDerivedKeymanagerAccounts(
 	} else {
 		fmt.Printf("Showing %d validator accounts\n", len(accountNames))
 	}
-	for i := uint64(0); i <= currentAccountNumber; i++ {
+	for i := 0; i < len(accountNames); i++ {
 		fmt.Println("")
 		validatingKeyPath := fmt.Sprintf(derived.ValidatingKeyDerivationPathTemplate, i)
-		withdrawalKeyPath := fmt.Sprintf(derived.WithdrawalKeyDerivationPathTemplate, i)
 
 		// Retrieve the withdrawal key account metadata.
 		fmt.Printf("%s | %s\n", au.BrightBlue(fmt.Sprintf("Account %d", i)).Bold(), au.BrightGreen(accountNames[i]).Bold())
-		fmt.Printf("%s %#x\n", au.BrightMagenta("[withdrawal public key]").Bold(), withdrawalPublicKeys[i])
-		if showPrivateKeys {
-			fmt.Printf("%s %#x\n", au.BrightRed("[withdrawal private key]").Bold(), withdrawalPrivateKeys[i])
-		}
-		fmt.Printf("%s %s\n", au.BrightMagenta("[derivation path]").Bold(), withdrawalKeyPath)
-
 		// Retrieve the validating key account metadata.
 		fmt.Printf("%s %#x\n", au.BrightCyan("[validating public key]").Bold(), validatingPubKeys[i])
-		if showPrivateKeys {
+		if showPrivateKeys && validatingPrivateKeys != nil {
 			fmt.Printf("%s %#x\n", au.BrightRed("[validating private key]").Bold(), validatingPrivateKeys[i])
 		}
 		fmt.Printf("%s %s\n", au.BrightCyan("[derivation path]").Bold(), validatingKeyPath)
-
-		if !showDepositData {
-			continue
-		}
-		enc, err := keymanager.DepositDataForAccount(i)
-		if err != nil {
-			return errors.Wrapf(err, "could not deposit data for account: %s", accountNames[i])
-		}
-		fmt.Printf(`
-======================Eth1 Deposit Transaction Data=====================
-
-%#x
-
-===================================================================`, enc)
 		fmt.Println(" ")
 	}
 	return nil
@@ -243,6 +220,29 @@ func listRemoteKeymanagerAccounts(
 		// Retrieve the validating key account metadata.
 		fmt.Printf("%s %#x\n", au.BrightCyan("[validating public key]").Bold(), validatingPubKeys[i])
 		fmt.Println(" ")
+	}
+	return nil
+}
+
+func listValidatorIndices(ctx context.Context, km keymanager.IKeymanager, client ethpb.BeaconNodeValidatorClient) error {
+	pubKeys, err := km.FetchValidatingPublicKeys(ctx)
+	if err != nil {
+		return errors.Wrap(err, "could not get validating public keys")
+	}
+	var pks [][]byte
+	for i := range pubKeys {
+		pks = append(pks, pubKeys[i][:])
+	}
+	req := &ethpb.MultipleValidatorStatusRequest{PublicKeys: pks}
+	resp, err := client.MultipleValidatorStatus(ctx, req)
+	if err != nil {
+		return errors.Wrap(err, "could not request validator indices")
+	}
+	fmt.Println(au.BrightGreen("Validator indices:").Bold())
+	for i, idx := range resp.Indices {
+		if idx != math.MaxUint64 {
+			fmt.Printf("%#x: %d\n", pubKeys[i][0:4], idx)
+		}
 	}
 	return nil
 }

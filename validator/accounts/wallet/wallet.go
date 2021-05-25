@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gofrs/flock"
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/cmd/validator/flags"
 	"github.com/prysmaticlabs/prysm/shared/fileutil"
-	"github.com/prysmaticlabs/prysm/shared/params"
 	"github.com/prysmaticlabs/prysm/shared/promptutil"
+	"github.com/prysmaticlabs/prysm/validator/accounts/iface"
 	"github.com/prysmaticlabs/prysm/validator/accounts/prompt"
-	"github.com/prysmaticlabs/prysm/validator/flags"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/derived"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/imported"
@@ -24,20 +23,18 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-var log = logrus.WithField("prefix", "wallet")
-
 const (
 	// KeymanagerConfigFileName for the keymanager used by the wallet: imported, derived, or remote.
 	KeymanagerConfigFileName = "keymanageropts.json"
-	// DirectoryPermissions for directories created under the wallet path.
-	DirectoryPermissions = os.ModePerm
 	// NewWalletPasswordPromptText for wallet creation.
 	NewWalletPasswordPromptText = "New wallet password"
 	// WalletPasswordPromptText for wallet unlocking.
-	WalletPasswordPromptText = "Wallet password"
+	PasswordPromptText = "Wallet password"
 	// ConfirmPasswordPromptText for confirming a wallet password.
 	ConfirmPasswordPromptText = "Confirm password"
-	hashCost                  = 8
+	// DefaultWalletPasswordFile used to store a wallet password with appropriate permissions
+	// if a user signs up via the Prysm web UI via RPC.
+	DefaultWalletPasswordFile = "walletpassword.txt"
 	// CheckExistsErrMsg for when there is an error while checking for a wallet
 	CheckExistsErrMsg = "could not check if wallet exists"
 	// CheckValidityErrMsg for when there is an error while checking wallet validity
@@ -49,14 +46,14 @@ const (
 var (
 	// ErrNoWalletFound signifies there was no wallet directory found on-disk.
 	ErrNoWalletFound = errors.New(
-		"no wallet found. You can create a new wallet with validator wallet create." +
+		"no wallet found. You can create a new wallet with `validator wallet create`. " +
 			"If you already did, perhaps you created a wallet in a custom directory, which you can specify using " +
-			"--wallet-dir=/path/to/my/wallet",
+			"`--wallet-dir=/path/to/my/wallet`",
 	)
 	// KeymanagerKindSelections as friendly text.
 	KeymanagerKindSelections = map[keymanager.Kind]string{
 		keymanager.Imported: "Imported Wallet (Recommended)",
-		keymanager.Derived:  "HD Wallet (Least secure)",
+		keymanager.Derived:  "HD Wallet",
 		keymanager.Remote:   "Remote Signing Wallet (Advanced)",
 	}
 	// ValidateExistingPass checks that an input cannot be empty.
@@ -84,7 +81,6 @@ type Wallet struct {
 	accountsPath   string
 	configFilePath string
 	walletPassword string
-	walletFileLock *flock.Flock
 	keymanagerKind keymanager.Kind
 }
 
@@ -181,10 +177,10 @@ func OpenWalletOrElseCli(cliCtx *cli.Context, otherwise func(cliCtx *cli.Context
 	if err != nil {
 		return nil, err
 	}
-	walletPassword, err := inputPassword(
+	walletPassword, err := InputPassword(
 		cliCtx,
 		flags.WalletPasswordFileFlag,
-		WalletPasswordPromptText,
+		PasswordPromptText,
 		false, /* Do not confirm password */
 		ValidateExistingPass,
 	)
@@ -235,7 +231,7 @@ func OpenWallet(_ context.Context, cfg *Config) (*Wallet, error) {
 
 // SaveWallet persists the wallet's directories to disk.
 func (w *Wallet) SaveWallet() error {
-	if err := os.MkdirAll(w.accountsPath, DirectoryPermissions); err != nil {
+	if err := fileutil.MkdirAll(w.accountsPath); err != nil {
 		return errors.Wrap(err, "could not create wallet directory")
 	}
 	return nil
@@ -258,42 +254,31 @@ func (w *Wallet) Password() string {
 
 // InitializeKeymanager reads a keymanager config from disk at the wallet path,
 // unmarshals it based on the wallet's keymanager kind, and returns its value.
-func (w *Wallet) InitializeKeymanager(
-	ctx context.Context,
-	skipMnemonicConfirm bool,
-) (keymanager.IKeymanager, error) {
-	configFile, err := w.ReadKeymanagerConfigFromDisk(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not read keymanager config")
-	}
+func (w *Wallet) InitializeKeymanager(ctx context.Context, cfg iface.InitKeymanagerConfig) (keymanager.IKeymanager, error) {
 	var km keymanager.IKeymanager
+	var err error
 	switch w.KeymanagerKind() {
 	case keymanager.Imported:
-		opts, err := imported.UnmarshalOptionsFile(configFile)
-		if err != nil {
-			return nil, errors.Wrap(err, "could not unmarshal keymanageropts file")
-		}
 		km, err = imported.NewKeymanager(ctx, &imported.SetupConfig{
-			Wallet: w,
-			Opts:   opts,
+			Wallet:           w,
+			ListenForChanges: cfg.ListenForChanges,
 		})
 		if err != nil {
 			return nil, errors.Wrap(err, "could not initialize imported keymanager")
 		}
 	case keymanager.Derived:
-		opts, err := derived.UnmarshalOptionsFile(configFile)
-		if err != nil {
-			return nil, errors.Wrap(err, "could not unmarshal keymanager config file")
-		}
 		km, err = derived.NewKeymanager(ctx, &derived.SetupConfig{
-			Opts:                opts,
-			Wallet:              w,
-			SkipMnemonicConfirm: skipMnemonicConfirm,
+			Wallet:           w,
+			ListenForChanges: cfg.ListenForChanges,
 		})
 		if err != nil {
 			return nil, errors.Wrap(err, "could not initialize derived keymanager")
 		}
 	case keymanager.Remote:
+		configFile, err := w.ReadKeymanagerConfigFromDisk(ctx)
+		if err != nil {
+			return nil, errors.Wrap(err, "could not read keymanager config")
+		}
 		opts, err := remote.UnmarshalOptionsFile(configFile)
 		if err != nil {
 			return nil, errors.Wrap(err, "could not unmarshal keymanager config file")
@@ -314,11 +299,17 @@ func (w *Wallet) InitializeKeymanager(
 // WriteFileAtPath within the wallet directory given the desired path, filename, and raw data.
 func (w *Wallet) WriteFileAtPath(_ context.Context, filePath, fileName string, data []byte) error {
 	accountPath := filepath.Join(w.accountsPath, filePath)
-	if err := os.MkdirAll(accountPath, os.ModePerm); err != nil {
-		return errors.Wrapf(err, "could not create path: %s", accountPath)
+	hasDir, err := fileutil.HasDir(accountPath)
+	if err != nil {
+		return err
+	}
+	if !hasDir {
+		if err := fileutil.MkdirAll(accountPath); err != nil {
+			return errors.Wrapf(err, "could not create path: %s", accountPath)
+		}
 	}
 	fullPath := filepath.Join(accountPath, fileName)
-	if err := ioutil.WriteFile(fullPath, data, params.BeaconIoConfig().ReadWritePermissions); err != nil {
+	if err := fileutil.WriteFile(fullPath, data); err != nil {
 		return errors.Wrapf(err, "could not write %s", filePath)
 	}
 	log.WithFields(logrus.Fields{
@@ -331,8 +322,14 @@ func (w *Wallet) WriteFileAtPath(_ context.Context, filePath, fileName string, d
 // ReadFileAtPath within the wallet directory given the desired path and filename.
 func (w *Wallet) ReadFileAtPath(_ context.Context, filePath, fileName string) ([]byte, error) {
 	accountPath := filepath.Join(w.accountsPath, filePath)
-	if err := os.MkdirAll(accountPath, os.ModePerm); err != nil {
-		return nil, errors.Wrapf(err, "could not create path: %s", accountPath)
+	hasDir, err := fileutil.HasDir(accountPath)
+	if err != nil {
+		return nil, err
+	}
+	if !hasDir {
+		if err := fileutil.MkdirAll(accountPath); err != nil {
+			return nil, errors.Wrapf(err, "could not create path: %s", accountPath)
+		}
 	}
 	fullPath := filepath.Join(accountPath, fileName)
 	matches, err := filepath.Glob(fullPath)
@@ -340,11 +337,11 @@ func (w *Wallet) ReadFileAtPath(_ context.Context, filePath, fileName string) ([
 		return []byte{}, errors.Wrap(err, "could not find file")
 	}
 	if len(matches) == 0 {
-		return []byte{}, fmt.Errorf("no files found %s", fullPath)
+		return []byte{}, fmt.Errorf("no files found in path: %s", fullPath)
 	}
 	rawData, err := ioutil.ReadFile(matches[0])
 	if err != nil {
-		return nil, errors.Wrapf(err, "could not read %s", filePath)
+		return nil, errors.Wrapf(err, "could not read path: %s", filePath)
 	}
 	return rawData, nil
 }
@@ -353,7 +350,7 @@ func (w *Wallet) ReadFileAtPath(_ context.Context, filePath, fileName string) ([
 // with a regex pattern.
 func (w *Wallet) FileNameAtPath(_ context.Context, filePath, fileName string) (string, error) {
 	accountPath := filepath.Join(w.accountsPath, filePath)
-	if err := os.MkdirAll(accountPath, os.ModePerm); err != nil {
+	if err := fileutil.MkdirAll(accountPath); err != nil {
 		return "", errors.Wrapf(err, "could not create path: %s", accountPath)
 	}
 	fullPath := filepath.Join(accountPath, fileName)
@@ -362,7 +359,7 @@ func (w *Wallet) FileNameAtPath(_ context.Context, filePath, fileName string) (s
 		return "", errors.Wrap(err, "could not find file")
 	}
 	if len(matches) == 0 {
-		return "", fmt.Errorf("no files found %s", fullPath)
+		return "", fmt.Errorf("no files found in path: %s", fullPath)
 	}
 	fullFileName := filepath.Base(matches[0])
 	return fullFileName, nil
@@ -380,61 +377,15 @@ func (w *Wallet) ReadKeymanagerConfigFromDisk(_ context.Context) (io.ReadCloser,
 
 }
 
-// LockWalletConfigFile lock read and write to wallet file in order to prevent
-// two validators from using the same keys.
-func (w *Wallet) LockWalletConfigFile(_ context.Context) error {
-	fileLock := flock.New(w.configFilePath)
-	locked, err := fileLock.TryLock()
-	if err != nil {
-		return errors.Wrapf(err, "failed to lock wallet config file: %s", w.configFilePath)
-	}
-	if !locked {
-		return fmt.Errorf("failed to lock wallet config file: %s", w.configFilePath)
-	}
-	w.walletFileLock = fileLock
-	return nil
-}
-
-// UnlockWalletConfigFile unlock wallet file.
-// should be called before client is closing in order to remove the file lock.
-func (w *Wallet) UnlockWalletConfigFile() error {
-	if w.walletFileLock == nil {
-		return errors.New("trying to unlock a nil lock")
-	}
-	return w.walletFileLock.Unlock()
-}
-
 // WriteKeymanagerConfigToDisk takes an encoded keymanager config file
 // and writes it to the wallet path.
 func (w *Wallet) WriteKeymanagerConfigToDisk(_ context.Context, encoded []byte) error {
 	configFilePath := filepath.Join(w.accountsPath, KeymanagerConfigFileName)
 	// Write the config file to disk.
-	if err := ioutil.WriteFile(configFilePath, encoded, params.BeaconIoConfig().ReadWritePermissions); err != nil {
-		return errors.Wrapf(err, "could not write %s", configFilePath)
+	if err := fileutil.WriteFile(configFilePath, encoded); err != nil {
+		return errors.Wrapf(err, "could not write config to path: %s", configFilePath)
 	}
 	log.WithField("configFilePath", configFilePath).Debug("Wrote keymanager config file to disk")
-	return nil
-}
-
-// ReadEncryptedSeedFromDisk reads the encrypted wallet seed configuration from
-// within the wallet path.
-func (w *Wallet) ReadEncryptedSeedFromDisk(_ context.Context) (io.ReadCloser, error) {
-	configFilePath := filepath.Join(w.accountsPath, derived.EncryptedSeedFileName)
-	if !fileutil.FileExists(configFilePath) {
-		return nil, fmt.Errorf("no encrypted seed file found at path: %s", w.accountsPath)
-	}
-	return os.Open(configFilePath)
-}
-
-// WriteEncryptedSeedToDisk writes the encrypted wallet seed configuration
-// within the wallet path.
-func (w *Wallet) WriteEncryptedSeedToDisk(_ context.Context, encoded []byte) error {
-	seedFilePath := filepath.Join(w.accountsPath, derived.EncryptedSeedFileName)
-	// Write the config file to disk.
-	if err := ioutil.WriteFile(seedFilePath, encoded, params.BeaconIoConfig().ReadWritePermissions); err != nil {
-		return errors.Wrapf(err, "could not write %s", seedFilePath)
-	}
-	log.WithField("seedFilePath", seedFilePath).Debug("Wrote wallet encrypted seed file to disk")
 	return nil
 }
 
@@ -460,10 +411,12 @@ func readKeymanagerKindFromWalletPath(walletPath string) (keymanager.Kind, error
 			return keymanagerKind, nil
 		}
 	}
-	return 0, errors.New("no keymanager folder, 'imported', 'remote', nor 'derived' found in wallet path")
+	return 0, errors.New("no keymanager folder (imported, remote, derived) found in wallet path")
 }
 
-func inputPassword(
+// InputPassword prompts for a password and optionally for password confirmation.
+// The password is validated according to custom rules.
+func InputPassword(
 	cliCtx *cli.Context,
 	passwordFileFlag *cli.StringFlag,
 	promptText string,

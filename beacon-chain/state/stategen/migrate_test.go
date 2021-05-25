@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
+	types "github.com/prysmaticlabs/eth2-types"
+	"github.com/prysmaticlabs/prysm/beacon-chain/core/blocks"
 	testDB "github.com/prysmaticlabs/prysm/beacon-chain/db/testing"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/testutil"
@@ -15,8 +16,8 @@ import (
 
 func TestMigrateToCold_CanSaveFinalizedInfo(t *testing.T) {
 	ctx := context.Background()
-	db, c := testDB.SetupDB(t)
-	service := New(db, c)
+	beaconDB := testDB.SetupDB(t)
+	service := New(beaconDB)
 	beaconState, _ := testutil.DeterministicGenesisState(t, 32)
 	b := testutil.NewBeaconBlock()
 	b.Block.Slot = 1
@@ -33,12 +34,12 @@ func TestMigrateToCold_CanSaveFinalizedInfo(t *testing.T) {
 func TestMigrateToCold_HappyPath(t *testing.T) {
 	hook := logTest.NewGlobal()
 	ctx := context.Background()
-	db, _ := testDB.SetupDB(t)
+	beaconDB := testDB.SetupDB(t)
 
-	service := New(db, cache.NewStateSummaryCache())
+	service := New(beaconDB)
 	service.slotsPerArchivedPoint = 1
 	beaconState, _ := testutil.DeterministicGenesisState(t, 32)
-	stateSlot := uint64(1)
+	stateSlot := types.Slot(1)
 	require.NoError(t, beaconState.SetSlot(stateSlot))
 	b := testutil.NewBeaconBlock()
 	b.Block.Slot = 2
@@ -50,12 +51,12 @@ func TestMigrateToCold_HappyPath(t *testing.T) {
 
 	gotState, err := service.beaconDB.State(ctx, fRoot)
 	require.NoError(t, err)
-	assert.DeepEqual(t, beaconState.InnerStateUnsafe(), gotState.InnerStateUnsafe(), "Did not save state")
+	assert.DeepSSZEqual(t, beaconState.InnerStateUnsafe(), gotState.InnerStateUnsafe(), "Did not save state")
 	gotRoot := service.beaconDB.ArchivedPointRoot(ctx, stateSlot/service.slotsPerArchivedPoint)
 	assert.Equal(t, fRoot, gotRoot, "Did not save archived root")
 	lastIndex, err := service.beaconDB.LastArchivedSlot(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(1), lastIndex, "Did not save last archived index")
+	assert.Equal(t, types.Slot(1), lastIndex, "Did not save last archived index")
 
 	require.LogsContain(t, hook, "Saved state in DB")
 }
@@ -63,36 +64,49 @@ func TestMigrateToCold_HappyPath(t *testing.T) {
 func TestMigrateToCold_RegeneratePath(t *testing.T) {
 	hook := logTest.NewGlobal()
 	ctx := context.Background()
-	db, _ := testDB.SetupDB(t)
+	beaconDB := testDB.SetupDB(t)
 
-	service := New(db, cache.NewStateSummaryCache())
+	service := New(beaconDB)
 	service.slotsPerArchivedPoint = 1
-	beaconState, _ := testutil.DeterministicGenesisState(t, 32)
-	stateSlot := uint64(1)
-	require.NoError(t, beaconState.SetSlot(stateSlot))
-	blk := testutil.NewBeaconBlock()
-	blk.Block.Slot = 2
-	fRoot, err := blk.Block.HashTreeRoot()
+	beaconState, pks := testutil.DeterministicGenesisState(t, 32)
+	genesisStateRoot, err := beaconState.HashTreeRoot(ctx)
 	require.NoError(t, err)
-	require.NoError(t, service.beaconDB.SaveBlock(ctx, blk))
-	require.NoError(t, service.beaconDB.SaveGenesisBlockRoot(ctx, fRoot))
-	require.NoError(t, service.beaconDB.SaveStateSummary(ctx, &pb.StateSummary{Slot: 1, Root: fRoot[:]}))
+	genesis := blocks.NewGenesisBlock(genesisStateRoot[:])
+	assert.NoError(t, beaconDB.SaveBlock(ctx, genesis))
+	gRoot, err := genesis.Block.HashTreeRoot()
+	require.NoError(t, err)
+	assert.NoError(t, beaconDB.SaveState(ctx, beaconState, gRoot))
+	assert.NoError(t, beaconDB.SaveGenesisBlockRoot(ctx, gRoot))
+
+	b1, err := testutil.GenerateFullBlock(beaconState, pks, testutil.DefaultBlockGenConfig(), 1)
+	require.NoError(t, err)
+	r1, err := b1.Block.HashTreeRoot()
+	require.NoError(t, err)
+	require.NoError(t, service.beaconDB.SaveBlock(ctx, b1))
+	require.NoError(t, service.beaconDB.SaveStateSummary(ctx, &pb.StateSummary{Slot: 1, Root: r1[:]}))
+
+	b4, err := testutil.GenerateFullBlock(beaconState, pks, testutil.DefaultBlockGenConfig(), 4)
+	require.NoError(t, err)
+	r4, err := b4.Block.HashTreeRoot()
+	require.NoError(t, err)
+	require.NoError(t, service.beaconDB.SaveBlock(ctx, b4))
+	require.NoError(t, service.beaconDB.SaveStateSummary(ctx, &pb.StateSummary{Slot: 4, Root: r4[:]}))
 	service.finalizedInfo = &finalizedInfo{
-		slot:  1,
-		root:  fRoot,
+		slot:  0,
+		root:  genesisStateRoot,
 		state: beaconState,
 	}
 
-	require.NoError(t, service.MigrateToCold(ctx, fRoot))
+	require.NoError(t, service.MigrateToCold(ctx, r4))
 
-	gotState, err := service.beaconDB.State(ctx, fRoot)
+	s1, err := service.beaconDB.State(ctx, r1)
 	require.NoError(t, err)
-	assert.DeepEqual(t, beaconState.InnerStateUnsafe(), gotState.InnerStateUnsafe(), "Did not save state")
-	gotRoot := service.beaconDB.ArchivedPointRoot(ctx, stateSlot/service.slotsPerArchivedPoint)
-	assert.Equal(t, fRoot, gotRoot, "Did not save archived root")
+	assert.Equal(t, s1.Slot(), types.Slot(1), "Did not save state")
+	gotRoot := service.beaconDB.ArchivedPointRoot(ctx, 1/service.slotsPerArchivedPoint)
+	assert.Equal(t, r1, gotRoot, "Did not save archived root")
 	lastIndex, err := service.beaconDB.LastArchivedSlot(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, uint64(1), lastIndex, "Did not save last archived index")
+	assert.Equal(t, types.Slot(1), lastIndex, "Did not save last archived index")
 
 	require.LogsContain(t, hook, "Saved state in DB")
 }
@@ -100,12 +114,12 @@ func TestMigrateToCold_RegeneratePath(t *testing.T) {
 func TestMigrateToCold_StateExistsInDB(t *testing.T) {
 	hook := logTest.NewGlobal()
 	ctx := context.Background()
-	db, _ := testDB.SetupDB(t)
+	beaconDB := testDB.SetupDB(t)
 
-	service := New(db, cache.NewStateSummaryCache())
+	service := New(beaconDB)
 	service.slotsPerArchivedPoint = 1
 	beaconState, _ := testutil.DeterministicGenesisState(t, 32)
-	stateSlot := uint64(1)
+	stateSlot := types.Slot(1)
 	require.NoError(t, beaconState.SetSlot(stateSlot))
 	b := testutil.NewBeaconBlock()
 	b.Block.Slot = 2

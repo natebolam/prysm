@@ -18,9 +18,9 @@ func MinimalSpecConfig() *BeaconChainConfig {
 	minimalConfig.ChurnLimitQuotient = 65536
 	minimalConfig.ShuffleRoundCount = 10
 	minimalConfig.MinGenesisActiveValidatorCount = 64
-	minimalConfig.MinGenesisTime = 0
+	minimalConfig.MinGenesisTime = 1578009600
 	minimalConfig.GenesisDelay = 300 // 5 minutes
-	minimalConfig.TargetAggregatorsPerCommittee = 3
+	minimalConfig.TargetAggregatorsPerCommittee = 16
 
 	// Gwei values
 	minimalConfig.MinDepositAmount = 1e9
@@ -56,9 +56,9 @@ func MinimalSpecConfig() *BeaconChainConfig {
 	minimalConfig.BaseRewardFactor = 64
 	minimalConfig.WhistleBlowerRewardQuotient = 512
 	minimalConfig.ProposerRewardQuotient = 8
-	minimalConfig.InactivityPenaltyQuotient = 1 << 24
-	minimalConfig.MinSlashingPenaltyQuotient = 32
-	minimalConfig.ProportionalSlashingMultiplier = 3
+	minimalConfig.InactivityPenaltyQuotient = 33554432
+	minimalConfig.MinSlashingPenaltyQuotient = 64
+	minimalConfig.ProportionalSlashingMultiplier = 2
 
 	// Max operations per block
 	minimalConfig.MaxProposerSlashings = 16
@@ -77,6 +77,7 @@ func MinimalSpecConfig() *BeaconChainConfig {
 
 	minimalConfig.DepositContractTreeDepth = 32
 	minimalConfig.FarFutureEpoch = 1<<64 - 1
+	minimalConfig.FarFutureSlot = 1<<64 - 1
 
 	return minimalConfig
 }

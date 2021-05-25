@@ -3,27 +3,18 @@
 package testing
 
 import (
-	"fmt"
-	"os"
-	"path"
+	"context"
 	"testing"
 
-	"github.com/prysmaticlabs/prysm/beacon-chain/cache"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db"
+	"github.com/prysmaticlabs/prysm/beacon-chain/db/iface"
 	"github.com/prysmaticlabs/prysm/beacon-chain/db/kv"
-	"github.com/prysmaticlabs/prysm/shared/rand"
-	"github.com/prysmaticlabs/prysm/shared/testutil"
+	"github.com/prysmaticlabs/prysm/beacon-chain/db/slasherkv"
 )
 
 // SetupDB instantiates and returns database backed by key value store.
-func SetupDB(t testing.TB) (db.Database, *cache.StateSummaryCache) {
-	randPath := rand.NewDeterministicGenerator().Int()
-	p := path.Join(testutil.TempDir(), fmt.Sprintf("/%d", randPath))
-	if err := os.RemoveAll(p); err != nil {
-		t.Fatalf("failed to remove directory: %v", err)
-	}
-	sc := cache.NewStateSummaryCache()
-	s, err := kv.NewKVStore(p, sc)
+func SetupDB(t testing.TB) db.Database {
+	s, err := kv.NewKVStore(context.Background(), t.TempDir(), &kv.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,9 +22,20 @@ func SetupDB(t testing.TB) (db.Database, *cache.StateSummaryCache) {
 		if err := s.Close(); err != nil {
 			t.Fatalf("failed to close database: %v", err)
 		}
-		if err := os.RemoveAll(s.DatabasePath()); err != nil {
-			t.Fatalf("could not remove tmp db dir: %v", err)
+	})
+	return s
+}
+
+// SetupSlasherDB --
+func SetupSlasherDB(t testing.TB) iface.SlasherDatabase {
+	s, err := slasherkv.NewKVStore(context.Background(), t.TempDir(), &slasherkv.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Fatalf("failed to close database: %v", err)
 		}
 	})
-	return s, sc
+	return s
 }

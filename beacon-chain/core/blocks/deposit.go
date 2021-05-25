@@ -6,9 +6,8 @@ import (
 
 	"github.com/pkg/errors"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
-	"github.com/prysmaticlabs/go-ssz"
 	"github.com/prysmaticlabs/prysm/beacon-chain/core/helpers"
-	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	iface "github.com/prysmaticlabs/prysm/beacon-chain/state/interface"
 	pb "github.com/prysmaticlabs/prysm/proto/beacon/p2p/v1"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
@@ -21,20 +20,30 @@ import (
 // ProcessPreGenesisDeposits processes a deposit for the beacon state before chainstart.
 func ProcessPreGenesisDeposits(
 	ctx context.Context,
-	beaconState *stateTrie.BeaconState,
+	beaconState iface.BeaconState,
 	deposits []*ethpb.Deposit,
-) (*stateTrie.BeaconState, error) {
+) (iface.BeaconState, error) {
 	var err error
-	beaconState, err = ProcessDeposits(ctx, beaconState, &ethpb.SignedBeaconBlock{
-		Block: &ethpb.BeaconBlock{Body: &ethpb.BeaconBlockBody{Deposits: deposits}}})
+	beaconState, err = ProcessDeposits(ctx, beaconState, deposits)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not process deposit")
 	}
+	beaconState, err = activateValidatorWithEffectiveBalance(beaconState, deposits)
+	if err != nil {
+		return nil, err
+	}
+	return beaconState, nil
+}
+
+// This updates validator's effective balance, and if it's above MaxEffectiveBalance, validator becomes active in genesis.
+func activateValidatorWithEffectiveBalance(beaconState iface.BeaconState, deposits []*ethpb.Deposit) (iface.BeaconState, error) {
 	for _, deposit := range deposits {
 		pubkey := deposit.Data.PublicKey
 		index, ok := beaconState.ValidatorIndexByPubkey(bytesutil.ToBytes48(pubkey))
+		// In the event of the pubkey not existing, we continue processing the other
+		// deposits.
 		if !ok {
-			return beaconState, nil
+			continue
 		}
 		balance, err := beaconState.BalanceAtIndex(index)
 		if err != nil {
@@ -66,38 +75,41 @@ func ProcessPreGenesisDeposits(
 //     process_deposit(state, deposit)
 func ProcessDeposits(
 	ctx context.Context,
-	beaconState *stateTrie.BeaconState,
-	b *ethpb.SignedBeaconBlock,
-) (*stateTrie.BeaconState, error) {
-	if b.Block == nil || b.Block.Body == nil {
-		return nil, errors.New("block and block body can't be nil")
-	}
-
-	deposits := b.Block.Body.Deposits
-	var err error
-	domain, err := helpers.ComputeDomain(params.BeaconConfig().DomainDeposit, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-
+	beaconState iface.BeaconState,
+	deposits []*ethpb.Deposit,
+) (iface.BeaconState, error) {
 	// Attempt to verify all deposit signatures at once, if this fails then fall back to processing
 	// individual deposits with signature verification enabled.
-	var verifySignature bool
-	if err := verifyDepositDataWithDomain(ctx, deposits, domain); err != nil {
-		log.WithError(err).Debug("Failed to verify deposit data, verifying signatures individually")
-		verifySignature = true
+	batchVerified, err := batchVerifyDepositsSignatures(ctx, deposits)
+	if err != nil {
+		return nil, err
 	}
 
 	for _, deposit := range deposits {
 		if deposit == nil || deposit.Data == nil {
 			return nil, errors.New("got a nil deposit in block")
 		}
-		beaconState, err = ProcessDeposit(beaconState, deposit, verifySignature)
+		beaconState, err = ProcessDeposit(beaconState, deposit, batchVerified)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not process deposit from %#x", bytesutil.Trunc(deposit.Data.PublicKey))
 		}
 	}
 	return beaconState, nil
+}
+
+func batchVerifyDepositsSignatures(ctx context.Context, deposits []*ethpb.Deposit) (bool, error) {
+	var err error
+	domain, err := helpers.ComputeDomain(params.BeaconConfig().DomainDeposit, nil, nil)
+	if err != nil {
+		return false, err
+	}
+
+	verified := false
+	if err := verifyDepositDataWithDomain(ctx, deposits, domain); err != nil {
+		log.WithError(err).Debug("Failed to batch verify deposits signatures, will try individual verify")
+		verified = true
+	}
+	return verified, nil
 }
 
 // ProcessDeposit takes in a deposit object and inserts it
@@ -139,7 +151,7 @@ func ProcessDeposits(
 //        # Increase balance by deposit amount
 //        index = ValidatorIndex(validator_pubkeys.index(pubkey))
 //        increase_balance(state, index, amount)
-func ProcessDeposit(beaconState *stateTrie.BeaconState, deposit *ethpb.Deposit, verifySignature bool) (*stateTrie.BeaconState, error) {
+func ProcessDeposit(beaconState iface.BeaconState, deposit *ethpb.Deposit, verifySignature bool) (iface.BeaconState, error) {
 	if err := verifyDeposit(beaconState, deposit); err != nil {
 		if deposit == nil || deposit.Data == nil {
 			return nil, err
@@ -190,7 +202,7 @@ func ProcessDeposit(beaconState *stateTrie.BeaconState, deposit *ethpb.Deposit, 
 	return beaconState, nil
 }
 
-func verifyDeposit(beaconState *stateTrie.BeaconState, deposit *ethpb.Deposit) error {
+func verifyDeposit(beaconState iface.ReadOnlyBeaconState, deposit *ethpb.Deposit) error {
 	// Verify Merkle proof of deposit and deposit trie root.
 	if deposit == nil || deposit.Data == nil {
 		return errors.New("received nil deposit or nil deposit data")
@@ -221,7 +233,6 @@ func verifyDeposit(beaconState *stateTrie.BeaconState, deposit *ethpb.Deposit) e
 	return nil
 }
 
-// Deprecated: This method uses deprecated ssz.SigningRoot.
 func verifyDepositDataSigningRoot(obj *ethpb.Deposit_Data, domain []byte) error {
 	return depositutil.VerifyDepositSignature(obj, domain)
 }
@@ -246,19 +257,16 @@ func verifyDepositDataWithDomain(ctx context.Context, deps []*ethpb.Deposit, dom
 		}
 		pks[i] = dpk
 		sigs[i] = dep.Data.Signature
-		root, err := ssz.SigningRoot(dep.Data)
+		depositMessage := &pb.DepositMessage{
+			PublicKey:             dep.Data.PublicKey,
+			WithdrawalCredentials: dep.Data.WithdrawalCredentials,
+			Amount:                dep.Data.Amount,
+		}
+		sr, err := helpers.ComputeSigningRoot(depositMessage, domain)
 		if err != nil {
-			return errors.Wrap(err, "could not get signing root")
+			return err
 		}
-		signingData := &pb.SigningData{
-			ObjectRoot: root[:],
-			Domain:     domain,
-		}
-		ctrRoot, err := signingData.HashTreeRoot()
-		if err != nil {
-			return errors.Wrap(err, "could not get container root")
-		}
-		msgs[i] = ctrRoot
+		msgs[i] = sr
 	}
 	verify, err := bls.VerifyMultipleSignatures(sigs, msgs, pks)
 	if err != nil {

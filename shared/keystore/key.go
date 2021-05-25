@@ -27,19 +27,11 @@ import (
 
 	"github.com/pborman/uuid"
 	"github.com/prysmaticlabs/prysm/shared/bls"
-	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/fileutil"
 )
 
 const (
 	keyHeaderKDF = "scrypt"
-
-	// StandardScryptN is the N parameter of Scrypt encryption algorithm, using 256MB
-	// memory and taking approximately 1s CPU time on a modern processor.
-	StandardScryptN = 1 << 18
-
-	// StandardScryptP is the P parameter of Scrypt encryption algorithm, using 256MB
-	// memory and taking approximately 1s CPU time on a modern processor.
-	StandardScryptP = 1
 
 	// LightScryptN is the N parameter of Scrypt encryption algorithm, using 4MB
 	// memory and taking approximately 100ms CPU time on a modern processor.
@@ -152,7 +144,10 @@ func NewKeyFromBLS(blsKey bls.SecretKey) (*Key, error) {
 
 // NewKey generates a new random key.
 func NewKey() (*Key, error) {
-	secretKey := bls.RandKey()
+	secretKey, err := bls.RandKey()
+	if err != nil {
+		return nil, err
+	}
 	return NewKeyFromBLS(secretKey)
 }
 
@@ -167,7 +162,7 @@ func storeNewRandomKey(ks keyStore, password string) error {
 func writeKeyFile(file string, content []byte) error {
 	// Create the keystore directory with appropriate permissions
 	// in case it is not present yet.
-	if err := os.MkdirAll(filepath.Dir(file), params.BeaconIoConfig().ReadWriteExecutePermissions); err != nil {
+	if err := fileutil.MkdirAll(filepath.Dir(file)); err != nil {
 		return err
 	}
 	// Atomic write: create a temporary hidden file first

@@ -14,20 +14,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/prysmaticlabs/prysm/cmd/validator/flags"
 	"github.com/prysmaticlabs/prysm/shared/bls"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/prysmaticlabs/prysm/shared/fileutil"
 	"github.com/prysmaticlabs/prysm/shared/promptutil"
+	"github.com/prysmaticlabs/prysm/validator/accounts/iface"
 	"github.com/prysmaticlabs/prysm/validator/accounts/prompt"
 	"github.com/prysmaticlabs/prysm/validator/accounts/wallet"
-	"github.com/prysmaticlabs/prysm/validator/flags"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/imported"
 	"github.com/urfave/cli/v2"
 	keystorev4 "github.com/wealdtech/go-eth2-wallet-encryptor-keystorev4"
 )
 
-var derivationPathRegex = regexp.MustCompile("m_12381_3600_([0-9]+)_([0-9]+)_([0-9]+)")
+var derivationPathRegex = regexp.MustCompile(`m_12381_3600_(\d+)_(\d+)_(\d+)`)
 
 // byDerivationPath implements sort.Interface based on a
 // derivation path present in a keystore filename, if any. This
@@ -35,7 +36,10 @@ var derivationPathRegex = regexp.MustCompile("m_12381_3600_([0-9]+)_([0-9]+)_([0
 // in a directory and import them nicely in order of the derivation path.
 type byDerivationPath []string
 
+// Len is the number of elements in the collection.
 func (fileNames byDerivationPath) Len() int { return len(fileNames) }
+
+// Less reports whether the element with index i must sort before the element with index j.
 func (fileNames byDerivationPath) Less(i, j int) bool {
 	// We check if file name at index i has a derivation path
 	// in the filename. If it does not, then it is not less than j, and
@@ -62,6 +66,7 @@ func (fileNames byDerivationPath) Less(i, j int) bool {
 	return a < b
 }
 
+// Swap swaps the elements with indexes i and j.
 func (fileNames byDerivationPath) Swap(i, j int) {
 	fileNames[i], fileNames[j] = fileNames[j], fileNames[i]
 }
@@ -78,6 +83,38 @@ type ImportAccountsConfig struct {
 // values necessary to run the function.
 func ImportAccountsCli(cliCtx *cli.Context) error {
 	w, err := wallet.OpenWalletOrElseCli(cliCtx, func(cliCtx *cli.Context) (*wallet.Wallet, error) {
+		walletDir, err := prompt.InputDirectory(cliCtx, prompt.WalletDirPromptText, flags.WalletDirFlag)
+		if err != nil {
+			return nil, err
+		}
+		exists, err := wallet.Exists(walletDir)
+		if err != nil {
+			return nil, errors.Wrap(err, wallet.CheckExistsErrMsg)
+		}
+		if exists {
+			isValid, err := wallet.IsValid(walletDir)
+			if err != nil {
+				return nil, errors.Wrap(err, wallet.CheckValidityErrMsg)
+			}
+			if !isValid {
+				return nil, errors.New(wallet.InvalidWalletErrMsg)
+			}
+			walletPassword, err := wallet.InputPassword(
+				cliCtx,
+				flags.WalletPasswordFileFlag,
+				wallet.PasswordPromptText,
+				false, /* Do not confirm password */
+				wallet.ValidateExistingPass,
+			)
+			if err != nil {
+				return nil, err
+			}
+			return wallet.OpenWallet(cliCtx.Context, &wallet.Config{
+				WalletDir:      walletDir,
+				WalletPassword: walletPassword,
+			})
+		}
+
 		cfg, err := extractWalletCreationConfigFromCli(cliCtx, keymanager.Imported)
 		if err != nil {
 			return nil, err
@@ -99,13 +136,13 @@ func ImportAccountsCli(cliCtx *cli.Context) error {
 		return errors.Wrap(err, "could not initialize wallet")
 	}
 
-	km, err := w.InitializeKeymanager(cliCtx.Context, true /* skip mnemonic confirm */)
+	km, err := w.InitializeKeymanager(cliCtx.Context, iface.InitKeymanagerConfig{ListenForChanges: false})
 	if err != nil {
 		return err
 	}
 	k, ok := km.(*imported.Keymanager)
 	if !ok {
-		return errors.Wrap(err, "Only imported wallets can import more keystores")
+		return errors.New("only imported wallets can import more keystores")
 	}
 
 	// Check if the user wishes to import a one-off, private key directly
@@ -184,7 +221,7 @@ func ImportAccountsCli(cliCtx *cli.Context) error {
 		return err
 	}
 	fmt.Printf(
-		"Successfully imported %s accounts, view all of them by running accounts list\n",
+		"Successfully imported %s accounts, view all of them by running `accounts list`\n",
 		au.BrightMagenta(strconv.Itoa(len(keystoresImported))),
 	)
 	return nil
@@ -244,7 +281,7 @@ func importPrivateKeyAsAccount(cliCtx *cli.Context, wallet *wallet.Wallet, km *i
 		return errors.Wrap(err, "could not import keystore into wallet")
 	}
 	fmt.Printf(
-		"Imported account with public key %#x, view all accounts by running accounts list\n",
+		"Imported account with public key %#x, view all accounts by running `accounts list`\n",
 		au.BrightMagenta(bytesutil.Trunc(privKey.PublicKey().Marshal())),
 	)
 	return nil

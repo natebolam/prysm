@@ -1,66 +1,41 @@
 package rpc
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/gogo/protobuf/types"
+	"github.com/golang/mock/gomock"
 	ethpb "github.com/prysmaticlabs/ethereumapis/eth/v1alpha1"
+	"github.com/prysmaticlabs/prysm/cmd/validator/flags"
 	pb "github.com/prysmaticlabs/prysm/proto/validator/accounts/v2"
-	"github.com/prysmaticlabs/prysm/shared/bls"
-	"github.com/prysmaticlabs/prysm/shared/params"
+	"github.com/prysmaticlabs/prysm/shared/bytesutil"
+	"github.com/prysmaticlabs/prysm/shared/mock"
 	"github.com/prysmaticlabs/prysm/shared/testutil/assert"
 	"github.com/prysmaticlabs/prysm/shared/testutil/require"
 	"github.com/prysmaticlabs/prysm/validator/accounts"
+	"github.com/prysmaticlabs/prysm/validator/accounts/iface"
 	"github.com/prysmaticlabs/prysm/validator/accounts/wallet"
-	"github.com/prysmaticlabs/prysm/validator/flags"
 	"github.com/prysmaticlabs/prysm/validator/keymanager"
 	"github.com/prysmaticlabs/prysm/validator/keymanager/derived"
+	constant "github.com/prysmaticlabs/prysm/validator/testing"
 )
 
-var defaultWalletPath = filepath.Join(flags.DefaultValidatorDir(), flags.WalletDefaultDirName)
-
-type mockAccountCreator struct {
-	data   *ethpb.Deposit_Data
-	pubKey []byte
-}
-
-func (m *mockAccountCreator) CreateAccount(ctx context.Context) ([]byte, *ethpb.Deposit_Data, error) {
-	return m.pubKey, m.data, nil
-}
-
-func TestServer_CreateAccount(t *testing.T) {
-	ctx := context.Background()
-	localWalletDir := setupWalletDir(t)
-	defaultWalletPath = localWalletDir
-	strongPass := "29384283xasjasd32%%&*@*#*"
-	// We attempt to create the wallet.
-	w, err := accounts.CreateWalletWithKeymanager(ctx, &accounts.CreateWalletConfig{
-		WalletCfg: &wallet.Config{
-			WalletDir:      defaultWalletPath,
-			KeymanagerKind: keymanager.Derived,
-			WalletPassword: strongPass,
-		},
-		SkipMnemonicConfirm: true,
-	})
-	require.NoError(t, err)
-	km, err := w.InitializeKeymanager(ctx, true /* skip mnemonic confirm */)
-	require.NoError(t, err)
-	s := &Server{
-		keymanager:        km,
-		walletInitialized: true,
-		wallet:            w,
-	}
-	_, err = s.CreateAccount(ctx, &pb.CreateAccountRequest{})
-	require.NoError(t, err)
-}
+var (
+	defaultWalletPath = filepath.Join(flags.DefaultValidatorDir(), flags.WalletDefaultDirName)
+)
 
 func TestServer_ListAccounts(t *testing.T) {
 	ctx := context.Background()
 	localWalletDir := setupWalletDir(t)
 	defaultWalletPath = localWalletDir
-	strongPass := "29384283xasjasd32%%&*@*#*"
 	// We attempt to create the wallet.
 	w, err := accounts.CreateWalletWithKeymanager(ctx, &accounts.CreateWalletConfig{
 		WalletCfg: &wallet.Config{
@@ -71,7 +46,7 @@ func TestServer_ListAccounts(t *testing.T) {
 		SkipMnemonicConfirm: true,
 	})
 	require.NoError(t, err)
-	km, err := w.InitializeKeymanager(ctx, true /* skip mnemonic confirm */)
+	km, err := w.InitializeKeymanager(ctx, iface.InitKeymanagerConfig{ListenForChanges: false})
 	require.NoError(t, err)
 	s := &Server{
 		keymanager:        km,
@@ -79,20 +54,15 @@ func TestServer_ListAccounts(t *testing.T) {
 		wallet:            w,
 	}
 	numAccounts := 50
-	keys := make([][]byte, numAccounts)
-	for i := 0; i < numAccounts; i++ {
-		key, _, err := km.(*derived.Keymanager).CreateAccount(ctx)
-		require.NoError(t, err)
-		keys[i] = key
-	}
+	dr, ok := km.(*derived.Keymanager)
+	require.Equal(t, true, ok)
+	err = dr.RecoverAccountsFromMnemonic(ctx, constant.TestMnemonic, "", numAccounts)
+	require.NoError(t, err)
 	resp, err := s.ListAccounts(ctx, &pb.ListAccountsRequest{
 		PageSize: int32(numAccounts),
 	})
 	require.NoError(t, err)
 	require.Equal(t, len(resp.Accounts), numAccounts)
-	for i := 0; i < numAccounts; i++ {
-		assert.DeepEqual(t, resp.Accounts[i].ValidatingPublicKey, keys[i])
-	}
 
 	tests := []struct {
 		req *pb.ListAccountsRequest
@@ -127,42 +97,11 @@ func TestServer_ListAccounts(t *testing.T) {
 	}
 }
 
-func Test_createAccountWithDepositData(t *testing.T) {
+func TestServer_BackupAccounts(t *testing.T) {
 	ctx := context.Background()
-	pubKey := bls.RandKey().PublicKey().Marshal()
-	m := &mockAccountCreator{
-		data: &ethpb.Deposit_Data{
-			PublicKey:             pubKey,
-			WithdrawalCredentials: make([]byte, 32),
-			Amount:                params.BeaconConfig().MaxEffectiveBalance,
-			Signature:             make([]byte, 96),
-		},
-		pubKey: pubKey,
-	}
-	rawResp, err := createAccountWithDepositData(ctx, m)
-	require.NoError(t, err)
-	assert.DeepEqual(
-		t, rawResp.Data["pubkey"], fmt.Sprintf("%x", pubKey),
-	)
-	assert.DeepEqual(
-		t, rawResp.Data["withdrawal_credentials"], fmt.Sprintf("%x", make([]byte, 32)),
-	)
-	assert.DeepEqual(
-		t, rawResp.Data["amount"], fmt.Sprintf("%d", params.BeaconConfig().MaxEffectiveBalance),
-	)
-	assert.DeepEqual(
-		t, rawResp.Data["signature"], fmt.Sprintf("%x", make([]byte, 96)),
-	)
-	assert.DeepEqual(
-		t, rawResp.Data["fork_version"], fmt.Sprintf("%x", params.BeaconConfig().GenesisForkVersion),
-	)
-}
-
-func TestServer_DeleteAccounts_FailedPreconditions_WrongKeymanagerKind(t *testing.T) {
 	localWalletDir := setupWalletDir(t)
 	defaultWalletPath = localWalletDir
-	ctx := context.Background()
-	strongPass := "29384283xasjasd32%%&*@*#*"
+	// We attempt to create the wallet.
 	w, err := accounts.CreateWalletWithKeymanager(ctx, &accounts.CreateWalletConfig{
 		WalletCfg: &wallet.Config{
 			WalletDir:      defaultWalletPath,
@@ -172,46 +111,205 @@ func TestServer_DeleteAccounts_FailedPreconditions_WrongKeymanagerKind(t *testin
 		SkipMnemonicConfirm: true,
 	})
 	require.NoError(t, err)
-	km, err := w.InitializeKeymanager(ctx, true /* skip mnemonic confirm */)
+	km, err := w.InitializeKeymanager(ctx, iface.InitKeymanagerConfig{ListenForChanges: false})
 	require.NoError(t, err)
-	ss := &Server{
-		wallet:     w,
-		keymanager: km,
+	s := &Server{
+		keymanager:        km,
+		walletInitialized: true,
+		wallet:            w,
 	}
-	_, err = ss.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
-		PublicKeys: make([][]byte, 1),
+	numAccounts := 50
+	dr, ok := km.(*derived.Keymanager)
+	require.Equal(t, true, ok)
+	err = dr.RecoverAccountsFromMnemonic(ctx, constant.TestMnemonic, "", numAccounts)
+	require.NoError(t, err)
+	resp, err := s.ListAccounts(ctx, &pb.ListAccountsRequest{
+		PageSize: int32(numAccounts),
 	})
-	assert.ErrorContains(t, "Only imported wallets can delete accounts", err)
+	require.NoError(t, err)
+	require.Equal(t, len(resp.Accounts), numAccounts)
+
+	pubKeys := make([][]byte, numAccounts)
+	for i, aa := range resp.Accounts {
+		pubKeys[i] = aa.ValidatingPublicKey
+	}
+	// We now attempt to backup all public keys from the wallet.
+	res, err := s.BackupAccounts(context.Background(), &pb.BackupAccountsRequest{
+		PublicKeys:     pubKeys,
+		BackupPassword: s.wallet.Password(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, res.ZipFile)
+
+	// Open a zip archive for reading.
+	buf := bytes.NewReader(res.ZipFile)
+	r, err := zip.NewReader(buf, int64(len(res.ZipFile)))
+	require.NoError(t, err)
+	require.Equal(t, len(pubKeys), len(r.File))
+
+	// Iterate through the files in the archive, checking they
+	// match the keystores we wanted to backup.
+	for i, f := range r.File {
+		keystoreFile, err := f.Open()
+		require.NoError(t, err)
+		encoded, err := ioutil.ReadAll(keystoreFile)
+		if err != nil {
+			require.NoError(t, keystoreFile.Close())
+			t.Fatal(err)
+		}
+		keystore := &keymanager.Keystore{}
+		if err := json.Unmarshal(encoded, &keystore); err != nil {
+			require.NoError(t, keystoreFile.Close())
+			t.Fatal(err)
+		}
+		assert.Equal(t, keystore.Pubkey, fmt.Sprintf("%x", pubKeys[i]))
+		require.NoError(t, keystoreFile.Close())
+	}
 }
 
-func TestServer_DeleteAccounts_FailedPreconditions(t *testing.T) {
-	ss := &Server{}
+func TestServer_DeleteAccounts_FailedPreconditions_DerivedWallet(t *testing.T) {
 	ctx := context.Background()
-	_, err := ss.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{})
-	assert.ErrorContains(t, "No public keys specified", err)
-	_, err = ss.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
-		PublicKeys: make([][]byte, 1),
+	localWalletDir := setupWalletDir(t)
+	defaultWalletPath = localWalletDir
+	// We attempt to create the wallet.
+	w, err := accounts.CreateWalletWithKeymanager(ctx, &accounts.CreateWalletConfig{
+		WalletCfg: &wallet.Config{
+			WalletDir:      defaultWalletPath,
+			KeymanagerKind: keymanager.Derived,
+			WalletPassword: strongPass,
+		},
+		SkipMnemonicConfirm: true,
+	})
+	require.NoError(t, err)
+	km, err := w.InitializeKeymanager(ctx, iface.InitKeymanagerConfig{ListenForChanges: false})
+	require.NoError(t, err)
+	s := &Server{
+		keymanager:        km,
+		walletInitialized: true,
+		wallet:            w,
+	}
+	numAccounts := 5
+	dr, ok := km.(*derived.Keymanager)
+	require.Equal(t, true, ok)
+	err = dr.RecoverAccountsFromMnemonic(ctx, constant.TestMnemonic, "", numAccounts)
+	require.NoError(t, err)
+
+	_, err = s.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
+		PublicKeysToDelete: nil,
+	})
+	assert.ErrorContains(t, "No public keys specified to delete", err)
+
+	keys, err := s.keymanager.FetchValidatingPublicKeys(ctx)
+	require.NoError(t, err)
+	_, err = s.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
+		PublicKeysToDelete: bytesutil.FromBytes48Array(keys),
+	})
+	require.NoError(t, err)
+}
+
+func TestServer_DeleteAccounts_FailedPreconditions_NoWallet(t *testing.T) {
+	s := &Server{}
+	ctx := context.Background()
+	_, err := s.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{})
+	assert.ErrorContains(t, "No public keys specified to delete", err)
+	_, err = s.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
+		PublicKeysToDelete: make([][]byte, 1),
 	})
 	assert.ErrorContains(t, "No wallet found", err)
 }
 
-func TestServer_DeleteAccounts_OK(t *testing.T) {
-	ss, pubKeys := createImportedWalletWithAccounts(t, 3)
+func TestServer_DeleteAccounts_OK_ImportedWallet(t *testing.T) {
+	s, pubKeys := createImportedWalletWithAccounts(t, 3)
 	ctx := context.Background()
-	keys, err := ss.keymanager.FetchValidatingPublicKeys(ctx)
+	keys, err := s.keymanager.FetchValidatingPublicKeys(ctx)
 	require.NoError(t, err)
 	require.Equal(t, len(pubKeys), len(keys))
 
 	// Next, we attempt to delete one of the keystores.
-	_, err = ss.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
-		PublicKeys: pubKeys[:1], // Delete the 0th public key
+	_, err = s.DeleteAccounts(ctx, &pb.DeleteAccountsRequest{
+		PublicKeysToDelete: pubKeys[:1], // Delete the 0th public key
 	})
 	require.NoError(t, err)
-	ss.keymanager, err = ss.wallet.InitializeKeymanager(ctx, true /* skip mnemonic confirm */)
+	s.keymanager, err = s.wallet.InitializeKeymanager(ctx, iface.InitKeymanagerConfig{ListenForChanges: false})
 	require.NoError(t, err)
 
 	// We expect one of the keys to have been deleted.
-	keys, err = ss.keymanager.FetchValidatingPublicKeys(ctx)
+	keys, err = s.keymanager.FetchValidatingPublicKeys(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, len(pubKeys)-1, len(keys))
+}
+
+func TestServer_VoluntaryExit(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ctx := context.Background()
+	mockValidatorClient := mock.NewMockBeaconNodeValidatorClient(ctrl)
+	mockNodeClient := mock.NewMockNodeClient(ctrl)
+
+	mockValidatorClient.EXPECT().
+		ValidatorIndex(gomock.Any(), gomock.Any()).
+		Return(&ethpb.ValidatorIndexResponse{Index: 0}, nil)
+
+	mockValidatorClient.EXPECT().
+		ValidatorIndex(gomock.Any(), gomock.Any()).
+		Return(&ethpb.ValidatorIndexResponse{Index: 1}, nil)
+
+	// Any time in the past will suffice
+	genesisTime := &types.Timestamp{
+		Seconds: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC).Unix(),
+	}
+
+	mockNodeClient.EXPECT().
+		GetGenesis(gomock.Any(), gomock.Any()).
+		Times(2).
+		Return(&ethpb.Genesis{GenesisTime: genesisTime}, nil)
+
+	mockValidatorClient.EXPECT().
+		DomainData(gomock.Any(), gomock.Any()).
+		Times(2).
+		Return(&ethpb.DomainResponse{SignatureDomain: make([]byte, 32)}, nil)
+
+	mockValidatorClient.EXPECT().
+		ProposeExit(gomock.Any(), gomock.AssignableToTypeOf(&ethpb.SignedVoluntaryExit{})).
+		Times(2).
+		Return(&ethpb.ProposeExitResponse{}, nil)
+
+	localWalletDir := setupWalletDir(t)
+	defaultWalletPath = localWalletDir
+	// We attempt to create the wallet.
+	w, err := accounts.CreateWalletWithKeymanager(ctx, &accounts.CreateWalletConfig{
+		WalletCfg: &wallet.Config{
+			WalletDir:      defaultWalletPath,
+			KeymanagerKind: keymanager.Derived,
+			WalletPassword: strongPass,
+		},
+		SkipMnemonicConfirm: true,
+	})
+	require.NoError(t, err)
+	km, err := w.InitializeKeymanager(ctx, iface.InitKeymanagerConfig{ListenForChanges: false})
+	require.NoError(t, err)
+	s := &Server{
+		keymanager:                km,
+		walletInitialized:         true,
+		wallet:                    w,
+		beaconNodeClient:          mockNodeClient,
+		beaconNodeValidatorClient: mockValidatorClient,
+	}
+	numAccounts := 2
+	dr, ok := km.(*derived.Keymanager)
+	require.Equal(t, true, ok)
+	err = dr.RecoverAccountsFromMnemonic(ctx, constant.TestMnemonic, "", numAccounts)
+	require.NoError(t, err)
+	pubKeys, err := dr.FetchValidatingPublicKeys(ctx)
+	require.NoError(t, err)
+
+	rawPubKeys := make([][]byte, len(pubKeys))
+	for i, key := range pubKeys {
+		rawPubKeys[i] = key[:]
+	}
+	res, err := s.VoluntaryExit(ctx, &pb.VoluntaryExitRequest{
+		PublicKeys: rawPubKeys,
+	})
+	require.NoError(t, err)
+	require.DeepEqual(t, rawPubKeys, res.ExitedKeys)
 }

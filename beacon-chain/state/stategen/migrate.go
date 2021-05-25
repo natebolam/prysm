@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	stateTrie "github.com/prysmaticlabs/prysm/beacon-chain/state"
+	iface "github.com/prysmaticlabs/prysm/beacon-chain/state/interface"
 	"github.com/prysmaticlabs/prysm/shared/bytesutil"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
@@ -45,7 +45,7 @@ func (s *State) MigrateToCold(ctx context.Context, fRoot [32]byte) error {
 			}
 
 			var aRoot [32]byte
-			var aState *stateTrie.BeaconState
+			var aState iface.BeaconState
 
 			// When the epoch boundary state is not in cache due to skip slot scenario,
 			// we have to regenerate the state which will represent epoch boundary.
@@ -68,13 +68,17 @@ func (s *State) MigrateToCold(ctx context.Context, fRoot [32]byte) error {
 				if err != nil {
 					return err
 				}
-				missingState, err := s.StateByRoot(ctx, missingRoot)
-				if err != nil {
-					return err
-				}
 				aRoot = missingRoot
-				aState = missingState
+				// There's no need to generate the state if the state already exists on the DB.
+				// We can skip saving the state.
+				if !s.beaconDB.HasState(ctx, aRoot) {
+					aState, err = s.StateByRoot(ctx, missingRoot)
+					if err != nil {
+						return err
+					}
+				}
 			}
+
 			if s.beaconDB.HasState(ctx, aRoot) {
 				// Remove hot state DB root to prevent it gets deleted later when we turn hot state save DB mode off.
 				s.saveHotStateDB.lock.Lock()
@@ -101,12 +105,6 @@ func (s *State) MigrateToCold(ctx context.Context, fRoot [32]byte) error {
 				}).Info("Saved state in DB")
 		}
 	}
-
-	// Migrate all state summary objects from state summary cache to DB.
-	if err := s.beaconDB.SaveStateSummaries(ctx, s.stateSummaryCache.GetAll()); err != nil {
-		return err
-	}
-	s.stateSummaryCache.Clear()
 
 	// Update finalized info in memory.
 	fInfo, ok, err := s.epochBoundaryStateCache.getByRoot(fRoot)
